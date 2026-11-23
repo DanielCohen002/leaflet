@@ -19,6 +19,8 @@ fun AlertDialog.Builder.showLeaf(): AlertDialog {
         // The system draws the title and list rows in its own dark text colour whatever the theme says.
         val titleId = dialog.context.resources.getIdentifier("alertTitle", "id", "android")
         dialog.findViewById<android.widget.TextView>(titleId)?.setTextColor(0xFFFFF8E7.toInt())
+        // Same for the message text (e.g. release notes), which was dark on the dark dialog.
+        dialog.findViewById<android.widget.TextView>(android.R.id.message)?.setTextColor(0xFFFFF8E7.toInt())
         dialog.listView?.let { lv ->
             lv.setOnHierarchyChangeListener(object : android.view.ViewGroup.OnHierarchyChangeListener {
                 override fun onChildViewAdded(parent: android.view.View?, child: android.view.View?) { tint(child) }
