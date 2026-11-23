@@ -29,7 +29,13 @@ object UpdateChecker {
                 if (activity.isFinishing || activity.isDestroyed) return@runOnUiThread
                 result
                     .onSuccess { show(activity, it) }
-                    .onFailure { Toast.makeText(activity, "Couldn't check for updates. Are you online?", Toast.LENGTH_LONG).show() }
+                    .onFailure {
+                        AlertDialog.Builder(activity)
+                            .setTitle("Couldn't check for updates")
+                            .setMessage("Leaflet could not reach GitHub. Check that you are online and try again.")
+                            .setPositiveButton("OK", null)
+                            .showLeaf()
+                    }
             }
         }.start()
     }
@@ -57,7 +63,11 @@ object UpdateChecker {
     private fun show(activity: Activity, release: Release) {
         val current = activity.packageManager.getPackageInfo(activity.packageName, 0).versionName ?: "0"
         if (!isNewer(release.version, current)) {
-            Toast.makeText(activity, "Leaflet $current is the latest version", Toast.LENGTH_LONG).show()
+            AlertDialog.Builder(activity)
+                .setTitle("You are up to date")
+                .setMessage("Leaflet $current is the newest version.")
+                .setPositiveButton("OK", null)
+                .showLeaf()
             return
         }
         AlertDialog.Builder(activity)
