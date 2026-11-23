@@ -21,8 +21,8 @@ android {
         applicationId = "com.djcohen.leaflet"
         minSdk = 30
         targetSdk = 36
-        versionCode = 14
-        versionName = "1.6.1"
+        versionCode = 15
+        versionName = "1.7.0"
         // 64-bit phones only: keeps the bundled archive library (RAR/7z support) from bloating the APK.
         ndk { abiFilters += listOf("arm64-v8a") }
     }
@@ -39,6 +39,11 @@ android {
     }
 
     buildTypes {
+        // Debug builds use the same shared key as releases (when signing.properties exists), so a test build on a phone
+        // can always be updated by a release and vice versa. Without that file they fall back to the usual debug key.
+        debug {
+            signingConfig = signingConfigs.findByName("release")
+        }
         release {
             // Code shrinking is off on purpose: the app is small, and an untested R8 pass is a risk for no real gain.
             isMinifyEnabled = false

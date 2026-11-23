@@ -165,13 +165,14 @@ class ReaderActivity : Activity() {
     private fun applyStyle() {
         val t = Themes.all[prefs.theme.coerceIn(Themes.all.indices)]
         page.setStyle(Fonts.typeface(prefs.font), prefs.textSizeSp, prefs.spacing / 100f, t.fg, t.bg, prefs.indent / 10f, prefs.justify)
-        page.setScrollMode(prefs.textScroll)
+        page.setScrollMode(false)   // the scroll option was removed; any old saved choice is ignored
+        page.turnStyle = prefs.turnStyle
         window.decorView.setBackgroundColor(t.bg)
         if (prefs.keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // Light theme needs dark status icons if the bars are ever shown.
         window.insetsController?.setSystemBarsAppearance(
-            if (prefs.theme == 2) 0 else WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS,
+            if (prefs.theme >= 2) 0 else WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS,
             WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS,
         )
     }
@@ -483,7 +484,7 @@ class ReaderActivity : Activity() {
         })
 
         label("Colors")
-        val group = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
+        val group = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
         Themes.all.forEachIndexed { i, t ->
             group.addView(RadioButton(this).apply { text = if (i == 2) "Dark (inverted)" else t.name; id = 1000 + i })
         }
@@ -491,13 +492,20 @@ class ReaderActivity : Activity() {
         group.setOnCheckedChangeListener { _, checked -> prefs.theme = checked - 1000; applyStyle() }
         box.addView(group)
 
+        label("Page turn")
+        val turnGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
+        listOf("None", "Slide", "Curl", "Flip").forEachIndexed { i, n ->
+            turnGroup.addView(RadioButton(this).apply { text = n; id = 2000 + i })
+        }
+        turnGroup.check(2000 + prefs.turnStyle.coerceIn(0, 3))
+        turnGroup.setOnCheckedChangeListener { _, checked -> prefs.turnStyle = checked - 2000; applyStyle() }
+        box.addView(turnGroup)
+
         fun check(text: String, value: Boolean, set: (Boolean) -> Unit) = CheckBox(this).apply {
             this.text = text; isChecked = value; setOnCheckedChangeListener { _, c -> set(c) }
         }.also { box.addView(it) }
         check("Justify text (straight edges)", prefs.justify) { prefs.justify = it; applyStyle() }
-        check("Scroll instead of turning pages", prefs.textScroll) { prefs.textScroll = it; applyStyle() }
         check("Volume keys turn pages", prefs.volumeKeys) { prefs.volumeKeys = it }
-        check("Swap volume keys (volume up = next)", prefs.swapVolume) { prefs.swapVolume = it }
         check("Keep screen on", prefs.keepScreenOn) { prefs.keepScreenOn = it; applyStyle() }
 
         AlertDialog.Builder(this).setTitle("Reading settings").setView(ScrollView(this).apply { addView(box) })
@@ -509,7 +517,7 @@ class ReaderActivity : Activity() {
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (prefs.volumeKeys && (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP)) {
             if (event.repeatCount == 0) {
-                val next = (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) != prefs.swapVolume
+                val next = keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
                 turn(next)
             }
             return true

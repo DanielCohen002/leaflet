@@ -30,7 +30,7 @@ A separate Audiobooks tab plays MP3, M4A/M4B, AAC, OGG/Opus, FLAC and WAV, from 
 
 ## Features
 
-- Paged or continuous-scroll reading, chapter list and chapter skipping, volume keys turn pages
+- Paged reading with Slide, Curl or Flip page turns (or none), inverted sepia theme, chapter list and chapter skipping, volume keys turn pages
 - Light, sepia and dark (inverted) colors, several fonts, text size and line spacing
 - Comics and PDFs: one page, two pages side by side (landscape), or continuous scroll; right-to-left (manga) mode; zoom
 - Long-press a word to select it, copy it, or look it up in the offline dictionary (WordNet 3.0)

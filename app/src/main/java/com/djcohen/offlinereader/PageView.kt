@@ -1,8 +1,20 @@
 package com.djcohen.offlinereader
 
 import android.content.Context
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.TimeInterpolator
+import android.animation.ValueAnimator
+import android.graphics.Bitmap
+import android.graphics.Camera
 import android.graphics.Canvas
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
+import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Path
+import android.graphics.Shader
+import android.view.animation.AccelerateDecelerateInterpolator
 import android.os.Handler
 import android.os.Looper
 import android.view.ViewConfiguration
@@ -21,6 +33,13 @@ import kotlin.math.abs
 /** Draws one page of a chapter. Pagination is done by slicing a StaticLayout into screen-height runs of lines. */
 class PageView(context: Context) : View(context) {
     enum class Zone { PREV, MENU, NEXT }
+
+    companion object {
+        const val STYLE_NONE = 0
+        const val STYLE_SLIDE = 1
+        const val STYLE_CURL = 2
+        const val STYLE_FLIP = 3
+    }
 
     var onZone: ((Zone) -> Unit)? = null
     /** Called with the href of a link the reader tapped. */
@@ -233,6 +252,7 @@ class PageView(context: Context) : View(context) {
     }
 
     private fun relayout(offset: Int) {
+        cancelTurn()
         clearSelection()
         if (width == 0 || height == 0) { pendingOffset = offset; return }
         text = withIndent(raw)
@@ -341,15 +361,271 @@ class PageView(context: Context) : View(context) {
     fun nextPage(): Boolean {
         clearSelection()
         if (scrollMode) return scrollBy(+1)
+        if (turnRunning) return true
         if (page + 1 >= pageCount) return false
+        if (prepareTurn(true)) { startTurn(true); return true }
         page++; invalidate(); return true
     }
 
     fun prevPage(): Boolean {
         clearSelection()
         if (scrollMode) return scrollBy(-1)
+        if (turnRunning) return true
         if (page <= 0) return false
+        if (prepareTurn(false)) { startTurn(false); return true }
         page--; invalidate(); return true
+    }
+
+    // --- page-turn animation (Slide, Curl, Flip) --------------------------------------------
+    // The current page and its neighbour are drawn to bitmaps; the animation only moves those bitmaps around.
+
+    /** 0 none, 1 slide, 2 corner curl, 3 flip. */
+    var turnStyle = STYLE_SLIDE
+        set(v) { field = v; cancelTurn() }
+
+    /** Right-to-left reading (manga): taps, swipes and the page-turn animation are mirrored. */
+    var rtl = false
+        set(v) { field = v; cancelTurn() }
+
+    private fun mirrored(b: Bitmap): Bitmap {
+        val r = Bitmap.createBitmap(b, 0, 0, b.width, b.height, Matrix().apply { preScale(-1f, 1f) }, false)
+        b.recycle()
+        return r
+    }
+
+    private var bmpCur: Bitmap? = null
+    private var bmpOther: Bitmap? = null
+    private var turnFwd = true
+    private var turnProg = 0f
+    private val curlP = floatArrayOf(0f, 0f)
+    private var turnAnim: ValueAnimator? = null
+    private var turnRunning = false
+    private var dragTurn = false
+    private val camera = Camera()
+    private val camMatrix = Matrix()
+    private val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private val shadePaint = Paint()
+    private val flapStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+
+    private fun animationsOn() = ValueAnimator.areAnimatorsEnabled()
+
+    private fun renderPage(p: Int): Bitmap {
+        val saved = page
+        page = p
+        val b = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        drawPage(Canvas(b), false)
+        page = saved
+        return b
+    }
+
+    private fun prepareTurn(forward: Boolean): Boolean {
+        if (turnStyle == STYLE_NONE || scrollMode || width == 0 || height == 0 || layout == null || !animationsOn()) return false
+        val other = if (forward) page + 1 else page - 1
+        if (other !in 0 until pageCount) return false
+        clearSelection()
+        cancelTurn()
+        bmpCur = renderPage(page).let { if (rtl) mirrored(it) else it }
+        bmpOther = renderPage(other).let { if (rtl) mirrored(it) else it }
+        turnFwd = forward
+        turnProg = 0f
+        setCurl(corner())
+        return true
+    }
+
+    private fun corner() = floatArrayOf(width.toFloat(), height.toFloat())
+    private fun curlEnd() = floatArrayOf(-Math.hypot(width.toDouble(), height.toDouble()).toFloat() * 0.95f, height * 0.5f)
+    private fun setCurl(p: FloatArray) { curlP[0] = p[0]; curlP[1] = p[1] }
+
+    private fun freeTurn() {
+        bmpCur?.recycle(); bmpOther?.recycle()
+        bmpCur = null; bmpOther = null
+    }
+
+    fun cancelTurn() {
+        turnAnim?.removeAllListeners(); turnAnim?.cancel(); turnAnim = null
+        turnRunning = false; dragTurn = false
+        if (bmpCur != null) { freeTurn(); invalidate() }
+    }
+
+    private fun startTurn(forward: Boolean) {
+        if (turnStyle == STYLE_CURL) {
+            if (forward) runTurn(true, 0f, 1f, corner(), curlEnd(), true, 520)
+            else { setCurl(curlEnd()); runTurn(true, 0f, 1f, curlEnd(), corner(), true, 520) }
+        } else runTurn(true, 0f, 1f, null, null, false, 400)
+    }
+
+    /** Animates slide/flip progress from [p0] to [p1], or the curl corner from [s] to [e]; [commit] turns the page at the end. */
+    private fun runTurn(commit: Boolean, p0: Float, p1: Float, s: FloatArray?, e: FloatArray?, arc: Boolean, duration: Long) {
+        turnRunning = true
+        val a = ValueAnimator.ofFloat(0f, 1f)
+        a.duration = duration
+        a.interpolator = if (turnStyle == STYLE_CURL) TimeInterpolator { t -> (t + AccelerateDecelerateInterpolator().getInterpolation(t)) / 2f }
+        else AccelerateDecelerateInterpolator()
+        a.addUpdateListener {
+            val f = it.animatedValue as Float
+            if (s != null && e != null) {
+                curlP[0] = s[0] + (e[0] - s[0]) * f
+                curlP[1] = s[1] + (e[1] - s[1]) * f - (if (arc) 0.1f * height * Math.sin(Math.PI * f).toFloat() else 0f)
+            } else turnProg = p0 + (p1 - p0) * f
+            invalidate()
+        }
+        a.addListener(object : AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: Animator) {
+                if (turnAnim !== a) return
+                turnAnim = null; turnRunning = false
+                if (commit) page = (page + if (turnFwd) 1 else -1).coerceIn(0, pageCount - 1)
+                freeTurn()
+                invalidate()
+            }
+        })
+        turnAnim = a
+        a.start()
+    }
+
+    /** Follows the finger while a slide or curl is dragged. Returns true while it owns the gesture. */
+    private fun turnDragMove(e: MotionEvent): Boolean {
+        if (turnStyle != STYLE_SLIDE && turnStyle != STYLE_CURL) return false
+        if (scrollMode || longPressFired || hasSelection || turnRunning) return false
+        val dx = (if (rtl) -1 else 1) * (e.x - downX)     // in right-to-left mode everything is computed mirrored
+        val dy = e.y - downY
+        if (!dragTurn) {
+            if (abs(dx) <= slop || abs(dx) < abs(dy) * 1.5f) return false
+            val fwd = dx < 0
+            if (turnStyle == STYLE_CURL && !fwd) return false
+            if (!prepareTurn(fwd)) return false
+            dragTurn = true
+            handler.removeCallbacks(longPress)
+            parent?.requestDisallowInterceptTouchEvent(true)
+        }
+        if (turnStyle == STYLE_SLIDE) {
+            turnProg = ((if (turnFwd) -dx else dx) / width).coerceIn(0f, 1f)
+        } else {
+            curlP[0] = (width + dx).coerceIn(-width.toFloat(), width - 2f)
+            curlP[1] = (height + dy).coerceIn(height * 0.15f, height - 2f)
+        }
+        invalidate()
+        return true
+    }
+
+    private fun finishTurnDrag() {
+        dragTurn = false
+        if (turnStyle == STYLE_SLIDE) {
+            val commit = turnProg > 0.25f
+            val left = if (commit) 1f - turnProg else turnProg
+            runTurn(commit, turnProg, if (commit) 1f else 0f, null, null, false, (400 * left).toLong().coerceAtLeast(120))
+        } else {
+            val commit = curlP[0] < width * 0.5f
+            runTurn(commit, 0f, 1f, curlP.copyOf(), if (commit) curlEnd() else corner(), false, 360)
+        }
+    }
+
+    private fun drawTurn(c: Canvas) {
+        c.save()
+        if (rtl) c.scale(-1f, 1f, width / 2f, 0f)
+        drawTurnInner(c)
+        c.restore()
+    }
+
+    private fun drawTurnInner(c: Canvas) {
+        val cur = bmpCur ?: return
+        val other = bmpOther ?: return
+        val w = width.toFloat(); val h = height.toFloat()
+        when (turnStyle) {
+            STYLE_FLIP -> {
+                val under = if (turnFwd) other else cur
+                val flipper = if (turnFwd) cur else other
+                val k = if (turnFwd) turnProg else 1f - turnProg
+                c.drawBitmap(under, 0f, 0f, null)
+                if (k < 0.995f) {
+                    camera.save()
+                    camera.setLocation(0f, 0f, -(w * 1.4f / 72f))
+                    camera.rotateY(-90f * k)
+                    camera.getMatrix(camMatrix)
+                    camera.restore()
+                    camMatrix.preTranslate(0f, -h / 2f)
+                    camMatrix.postTranslate(0f, h / 2f)
+                    val b = 1f - 0.5f * k
+                    bmpPaint.colorFilter = ColorMatrixColorFilter(ColorMatrix(floatArrayOf(
+                        b, 0f, 0f, 0f, 0f,  0f, b, 0f, 0f, 0f,  0f, 0f, b, 0f, 0f,  0f, 0f, 0f, 1f, 0f)))
+                    c.drawBitmap(flipper, camMatrix, bmpPaint)
+                    bmpPaint.colorFilter = null
+                }
+            }
+            STYLE_CURL -> drawCurl(c, cur, other, w, h)
+            else -> {
+                val off = turnProg * w
+                if (turnFwd) { c.drawBitmap(cur, -off, 0f, null); c.drawBitmap(other, w - off, 0f, null) }
+                else { c.drawBitmap(cur, off, 0f, null); c.drawBitmap(other, -w + off, 0f, null) }
+            }
+        }
+    }
+
+    /** Corner curl: the corner (w,h) is dragged to P; the fold is the perpendicular bisector of the two, and the part of the page past it is reflected to draw the back. */
+    private fun drawCurl(c: Canvas, cur: Bitmap, other: Bitmap, w: Float, h: Float) {
+        val top = if (turnFwd) cur else other
+        val under = if (turnFwd) other else cur
+        c.drawBitmap(under, 0f, 0f, null)
+        val dx = w - curlP[0]; val dy = h - curlP[1]
+        val len = Math.hypot(dx.toDouble(), dy.toDouble()).toFloat()
+        if (len < 2f) { c.drawBitmap(top, 0f, 0f, null); return }
+        val nx = dx / len; val ny = dy / len
+        val mx = (w + curlP[0]) / 2f; val my = (h + curlP[1]) / 2f
+        val d = mx * nx + my * ny
+        val rect = floatArrayOf(0f, 0f, w, 0f, w, h, 0f, h)
+        val pSide = clipPoly(rect, nx, ny, d, false)
+        val cSide = clipPoly(rect, nx, ny, d, true)
+        val shade = 48 * density
+        if (cSide.size >= 6) {                       // shadow cast on the page underneath
+            c.save(); c.clipPath(polyPath(cSide))
+            shadePaint.shader = LinearGradient(mx, my, mx + nx * shade, my + ny * shade, 0x66000000, 0, Shader.TileMode.CLAMP)
+            c.drawPaint(shadePaint); c.restore()
+        }
+        if (pSide.size >= 6) {
+            c.save(); c.clipPath(polyPath(pSide)); c.drawBitmap(top, 0f, 0f, null); c.restore()
+        }
+        if (cSide.size >= 6) {                       // the back of the page: blank paper with fold shading
+            val flap = FloatArray(cSide.size)
+            var i = 0
+            while (i < cSide.size) {
+                val k = 2f * (cSide[i] * nx + cSide[i + 1] * ny - d)
+                flap[i] = cSide[i] - k * nx; flap[i + 1] = cSide[i + 1] - k * ny
+                i += 2
+            }
+            val fp = polyPath(flap)
+            flapStroke.strokeWidth = 12 * density; flapStroke.color = 0x14000000; c.drawPath(fp, flapStroke)
+            flapStroke.strokeWidth = 6 * density; flapStroke.color = 0x22000000; c.drawPath(fp, flapStroke)
+            c.save(); c.clipPath(fp)
+            c.drawColor(bg)
+            shadePaint.shader = LinearGradient(mx, my, mx - nx * 64 * density, my - ny * 64 * density, 0x66000000, 0, Shader.TileMode.CLAMP)
+            c.drawPaint(shadePaint)
+            c.restore()
+        }
+        shadePaint.shader = null
+    }
+
+    private fun polyPath(p: FloatArray): Path {
+        val path = Path()
+        path.moveTo(p[0], p[1])
+        var i = 2
+        while (i < p.size) { path.lineTo(p[i], p[i + 1]); i += 2 }
+        path.close()
+        return path
+    }
+
+    /** Clips polygon [poly] (x,y pairs) to one side of the line n.p = d. */
+    private fun clipPoly(poly: FloatArray, nx: Float, ny: Float, d: Float, positive: Boolean): FloatArray {
+        val out = ArrayList<Float>()
+        val n = poly.size / 2
+        for (i in 0 until n) {
+            val ax = poly[i * 2]; val ay = poly[i * 2 + 1]
+            val bx = poly[((i + 1) % n) * 2]; val by = poly[((i + 1) % n) * 2 + 1]
+            val sa = ax * nx + ay * ny - d; val sb = bx * nx + by * ny - d
+            val ia = if (positive) sa >= 0 else sa <= 0
+            val ib = if (positive) sb >= 0 else sb <= 0
+            if (ia) { out.add(ax); out.add(ay) }
+            if (ia != ib) { val t = sa / (sa - sb); out.add(ax + (bx - ax) * t); out.add(ay + (by - ay) * t) }
+        }
+        return out.toFloatArray()
     }
 
     private fun scrollBy(direction: Int): Boolean {
@@ -369,6 +645,10 @@ class PageView(context: Context) : View(context) {
     }
 
     override fun onDraw(canvas: Canvas) {
+        if (bmpCur != null) drawTurn(canvas) else drawPage(canvas, true)
+    }
+
+    private fun drawPage(canvas: Canvas, withSelection: Boolean) {
         canvas.drawColor(bg)
         val l = layout ?: return
         if (pageStartLines.isEmpty() || l.lineCount == 0) return
@@ -379,13 +659,13 @@ class PageView(context: Context) : View(context) {
         val originY = (insetT + vMargin).toFloat()
         canvas.translate(originX, originY - top)
         canvas.clipRect(0f, top.toFloat(), contentWidth.toFloat(), bottom.toFloat())
-        if (selStart in 0 until selEnd) {
+        if (withSelection && selStart in 0 until selEnd) {
             l.getSelectionPath(selStart, selEnd, selPath)
             canvas.drawPath(selPath, selPaint)
         }
         l.draw(canvas)
         canvas.restore()
-        if (selStart in 0 until selEnd) {
+        if (withSelection && selStart in 0 until selEnd) {
             val a = handlePoint(selStart, false)
             val b = handlePoint(selEnd, true)
             canvas.drawCircle(a[0], a[1] + handleRadius, handleRadius, handlePaint)
@@ -421,6 +701,7 @@ class PageView(context: Context) : View(context) {
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                if (turnRunning) return true
                 downX = e.x; downY = e.y; longPressFired = false
                 scrolling = false
                 if (scrollMode) {
@@ -454,6 +735,8 @@ class PageView(context: Context) : View(context) {
                         lastY = e.y
                         invalidate()
                     }
+                } else if (turnDragMove(e)) {
+                    // a slide or curl is following the finger
                 } else if (abs(e.x - downX) > slop || abs(e.y - downY) > slop) {
                     handler.removeCallbacks(longPress)
                 }
@@ -461,11 +744,13 @@ class PageView(context: Context) : View(context) {
             }
             MotionEvent.ACTION_CANCEL -> {
                 handler.removeCallbacks(longPress); dragging = 0; scrolling = false
+                if (dragTurn) cancelTurn()
                 velocity?.recycle(); velocity = null
                 return true
             }
             MotionEvent.ACTION_UP -> {
                 handler.removeCallbacks(longPress)
+                if (dragTurn) { finishTurnDrag(); return true }
                 val wasDragging = dragging != 0
                 dragging = 0
                 if (scrolling) {
@@ -491,10 +776,10 @@ class PageView(context: Context) : View(context) {
                     if (href != null) { onLink?.invoke(href); return true }
                 }
                 if (!scrollMode && abs(dx) > 70 * density && abs(dx) > abs(dy) * 1.5f) {
-                    onZone?.invoke(if (dx < 0) Zone.NEXT else Zone.PREV)
+                    onZone?.invoke(if ((dx < 0) != rtl) Zone.NEXT else Zone.PREV)
                 } else if (abs(dx) < 20 * density && abs(dy) < 20 * density) {
                     val f = e.x / width
-                    onZone?.invoke(if (f < 0.3f) Zone.PREV else if (f > 0.7f) Zone.NEXT else Zone.MENU)
+                    onZone?.invoke(if (f < 0.3f) (if (rtl) Zone.NEXT else Zone.PREV) else if (f > 0.7f) (if (rtl) Zone.PREV else Zone.NEXT) else Zone.MENU)
                 }
                 return true
             }

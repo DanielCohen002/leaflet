@@ -457,7 +457,6 @@ class ImageReaderActivity : Activity() {
         }
         check("Invert colors", prefs.invertImages) { prefs.invertImages = it; applyPrefs() }
         check("Volume keys turn pages", prefs.volumeKeys) { prefs.volumeKeys = it }
-        check("Swap volume keys (volume up = next)", prefs.swapVolume) { prefs.swapVolume = it }
         check("Keep screen on", prefs.keepScreenOn) { prefs.keepScreenOn = it; applyPrefs() }
         box.addView(TextView(this).apply {
             text = "Double-tap to zoom, pinch to zoom further, drag to pan."
@@ -471,7 +470,7 @@ class ImageReaderActivity : Activity() {
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (prefs.volumeKeys && (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP)) {
-            if (event.repeatCount == 0) turn((keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) != prefs.swapVolume)
+            if (event.repeatCount == 0) turn(keyCode == KeyEvent.KEYCODE_VOLUME_DOWN)
             return true
         }
         return super.onKeyDown(keyCode, event)

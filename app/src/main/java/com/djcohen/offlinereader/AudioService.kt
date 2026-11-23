@@ -47,6 +47,9 @@ class AudioService : Service() {
     private var resumeAfterFocus = false
     private var focusRequest: AudioFocusRequest? = null
     private var inForeground = false
+    private var pausedForSilence = false
+    private var silencedAt = 0L
+    private var lastVolume = 0
     private var ticks = 0
 
     var book: Audiobook? = null
@@ -81,6 +84,25 @@ class AudioService : Service() {
             isActive = true
         }
         registerReceiver(noisy, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY), RECEIVER_NOT_EXPORTED)
+        lastVolume = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
+        registerReceiver(volumeWatcher, IntentFilter("android.media.VOLUME_CHANGED_ACTION"), RECEIVER_NOT_EXPORTED)
+    }
+
+    /** Volume turned down to zero pauses the audiobook; turning it back up (within half an hour) resumes it. */
+    private val volumeWatcher = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.getIntExtra("android.media.EXTRA_VOLUME_STREAM_TYPE", -1) != AudioManager.STREAM_MUSIC) return
+            val v = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
+            if (v == 0 && lastVolume > 0 && wantPlay) {
+                pause()
+                pausedForSilence = true
+                silencedAt = System.currentTimeMillis()
+            } else if (v > 0 && pausedForSilence) {
+                pausedForSilence = false
+                if (System.currentTimeMillis() - silencedAt < 30 * 60 * 1000L) play()
+            }
+            lastVolume = v
+        }
     }
 
     /** Headphones unplugged or Bluetooth lost: stop, rather than playing out loud. */
@@ -102,6 +124,7 @@ class AudioService : Service() {
         handler.removeCallbacks(ticker)
         saveNow()
         try { unregisterReceiver(noisy) } catch (_: Throwable) { }
+        try { unregisterReceiver(volumeWatcher) } catch (_: Throwable) { }
         releasePlayer()
         session.release()
         abandonFocus()
@@ -190,6 +213,7 @@ class AudioService : Service() {
 
     fun play() {
         val b = book ?: return
+        pausedForSilence = false
         if (wantPlay) return
         // Pressing play at the very end starts the audiobook again.
         val atEnd = trackIndex == b.tracks.size - 1 && prepared && positionMs() >= b.tracks[trackIndex].durationMs - 1500
@@ -215,6 +239,7 @@ class AudioService : Service() {
 
     fun pause() {
         resumeAfterFocus = false
+        pausedForSilence = false
         if (!wantPlay) return
         wantPlay = false
         try { if (prepared) player?.pause() } catch (_: Throwable) { }

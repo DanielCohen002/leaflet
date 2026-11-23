@@ -11,6 +11,7 @@ object Themes {
         ThemeColors("Light", 0xFF1A1A1A.toInt(), 0xFFFAFAFA.toInt()),
         ThemeColors("Sepia", 0xFF4B3621.toInt(), 0xFFF4ECD8.toInt()),
         ThemeColors("Dark", 0xFFD0D0D0.toInt(), 0xFF000000.toInt()),
+        ThemeColors("Inverted sepia", 0xFFE4D4B8.toInt(), 0xFF2A2019.toInt()),
     )
 }
 
@@ -95,6 +96,10 @@ class Prefs(context: Context, ext: String = "") {
     var theme: Int
         get() = int("theme", 2)
         set(v) = putInt("theme", v)
+    /** Page-turn animation for text books: 0 none, 1 slide, 2 curl, 3 flip. */
+    var turnStyle: Int
+        get() = int("turnstyle", 1)
+        set(v) = putInt("turnstyle", v)
     var volumeKeys: Boolean
         get() = bool("volkeys", true)
         set(v) = putBool("volkeys", v)
