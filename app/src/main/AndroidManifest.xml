@@ -1,7 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Deliberately NO permissions. In particular, no INTERNET: Android blocks all network access. -->
+    <!-- UPDATE-CHECK: the only use of the internet is the "Check for updates" link (UpdateChecker.kt). Delete this line and
+         that file to make Leaflet offline-only again (see the README). The other permissions are for audiobook playback in
+         the background (a foreground service) and its lock-screen notification. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="false"
@@ -14,6 +20,7 @@
 
         <activity
             android:name=".LibraryActivity"
+            android:enableOnBackInvokedCallback="false"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -41,7 +48,16 @@
             android:name=".ImageReaderActivity"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
             android:exported="false" />
-        <!-- No networking components, services or receivers anywhere in this app. -->
+        <activity
+            android:name=".AudioPlayerActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
+            android:launchMode="singleTop"
+            android:exported="false" />
+        <service
+            android:name=".AudioService"
+            android:foregroundServiceType="mediaPlayback"
+            android:exported="false" />
+        <!-- No networking components anywhere in this app. -->
 
         <activity
             android:name=".ReaderActivity"

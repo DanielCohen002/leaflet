@@ -2,11 +2,15 @@
 
 # Leaflet
 
-A personal e-reader for Android that never touches the internet. The name is a double meaning: a leaflet is a small leaf of a plant,
+A personal e-reader (and audiobook player) for Android that stays offline. The name is a double meaning: a leaflet is a small leaf of a plant,
 and a printed leaflet.
 
-**No network access.** The app declares no permissions at all (not even `INTERNET`), so Android itself blocks any
-connection. There is no cloud sync, no analytics, and no web dictionary: lookups use a bundled offline dictionary.
+**Offline by design.** There is no cloud sync, no analytics, and no web dictionary: lookups use a bundled offline dictionary.
+The one exception is the **Check for updates** link in the library header: only when you tap it, the app asks GitHub for the
+latest release and, if there is a newer one, shows its notes and opens the APK link in your browser. It never downloads or
+installs anything itself. That is the only use of the `INTERNET` permission, and it can be removed (see
+[Removing the update check](#removing-the-update-check)). The other permissions are for audiobook playback in the
+background (a foreground service) and the playback notification.
 
 ## What it reads
 
@@ -14,6 +18,15 @@ connection. There is no cloud sync, no analytics, and no web dictionary: lookups
 | --- | --- |
 | Books | EPUB, MOBI / AZW / AZW3 / PRC (DRM-free), FB2, TXT, HTML, Markdown |
 | Page images | PDF, CBZ, CBR, CB7, CBT (RAR/7z/tar comics are unpacked once into a CBZ when imported) |
+
+## Audiobooks
+
+A separate Audiobooks tab plays MP3, M4A/M4B, AAC, OGG/Opus, FLAC and WAV, from files or a whole folder (the files stay where they are).
+
+- Remembers your place in each audiobook (and its speed), so several can be in progress at once
+- Skip back/forward buttons with amounts you choose, speed choices you choose, and time left shown at the current speed
+- M4B chapters (chapter list, previous/next chapter), bookmarks with notes, a sleep timer (minutes or end of chapter)
+- Keeps playing with the screen off, with a notification, lock-screen and headset buttons
 
 ## Features
 
@@ -46,6 +59,19 @@ cp path/to/WordNet-3.0/LICENSE app/src/main/assets/WORDNET-LICENSE.txt   # alrea
 # 2. Debug build
 ./gradlew assembleDebug
 ```
+
+### Removing the update check
+
+To make Leaflet fully offline again (no `INTERNET` permission, so Android itself blocks every connection), do these three
+things. Everything is marked `UPDATE-CHECK` so you can find it with a search:
+
+1. Delete `app/src/main/java/com/djcohen/offlinereader/UpdateChecker.kt`.
+2. Delete the `INTERNET` line (and its comment) in `app/src/main/AndroidManifest.xml`.
+3. Delete the "Check for updates" `TextView` in `LibraryActivity.kt` (the block marked `UPDATE-CHECK`).
+
+Then change the "Offline by design" paragraph above back to "No network access", and the "Leaflet only goes online..." line
+in the empty library message (`LibraryActivity.kt`, also marked `UPDATE-CHECK`). People then update by downloading the new
+APK from the Releases page. When the GitHub account is renamed, update `LATEST_RELEASE_URL` in `UpdateChecker.kt`.
 
 ### Release signing
 

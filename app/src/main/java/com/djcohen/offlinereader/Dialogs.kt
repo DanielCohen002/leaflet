@@ -55,3 +55,56 @@ private fun tint(v: android.view.View?) {
     if (v is android.widget.TextView) v.setTextColor(0xFFFFF8E7.toInt())
     else if (v is android.view.ViewGroup) for (i in 0 until v.childCount) tint(v.getChildAt(i))
 }
+
+private const val CARD = 0xFFFFF8E7.toInt()
+private const val CARD_PRESSED = 0xFFEADFC0.toInt()
+private const val INK = 0xFF22301F.toInt()
+private const val MUTED = 0xFF5E7F61.toInt()
+
+/** One choice in [showChoices]: a title, an optional line of explanation, and what happens when it is tapped. */
+class Choice(val title: String, val subtitle: String? = null, val onPick: () -> Unit)
+
+/**
+ * A dialog whose choices are cream rounded cards (like the books on the shelf) instead of bare lines of text,
+ * so they look tappable, with room between them.
+ */
+fun android.app.Activity.showChoices(title: String, choices: List<Choice>): AlertDialog {
+    val density = resources.displayMetrics.density
+    fun dp(v: Int) = (v * density).toInt()
+    fun rounded(color: Int, radius: Int) = GradientDrawable().apply { setColor(color); cornerRadius = radius * density }
+    var dialog: AlertDialog? = null
+    val column = android.widget.LinearLayout(this).apply {
+        orientation = android.widget.LinearLayout.VERTICAL
+        setPadding(dp(20), dp(8), dp(20), dp(8))
+    }
+    for (c in choices) {
+        val card = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            background = StateListDrawable().apply {
+                addState(intArrayOf(android.R.attr.state_pressed), rounded(CARD_PRESSED, 18))
+                addState(intArrayOf(), rounded(CARD, 18))
+            }
+            setPadding(dp(16), dp(16), dp(18), dp(16))
+            addView(android.view.View(context).apply { background = rounded(LEAF, 3) },
+                android.widget.LinearLayout.LayoutParams(dp(5), dp(40)).apply { marginEnd = dp(14) })
+            addView(android.widget.LinearLayout(context).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                addView(android.widget.TextView(context).apply {
+                    text = c.title; textSize = 17f; setTextColor(INK)
+                    typeface = android.graphics.Typeface.create("serif", android.graphics.Typeface.BOLD)
+                })
+                if (c.subtitle != null) addView(android.widget.TextView(context).apply {
+                    text = c.subtitle; textSize = 13f; setTextColor(MUTED); setPadding(0, dp(3), 0, 0)
+                })
+            }, android.widget.LinearLayout.LayoutParams(0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            setOnClickListener { dialog?.dismiss(); c.onPick() }
+        }
+        column.addView(card, android.widget.LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+    }
+    dialog = AlertDialog.Builder(this).setTitle(title)
+        .setView(android.widget.ScrollView(this).apply { addView(column) })
+        .setNegativeButton("Cancel", null)
+        .showLeaf()
+    return dialog
+}

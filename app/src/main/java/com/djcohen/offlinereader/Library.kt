@@ -24,6 +24,16 @@ class Library(private val context: Context) {
         get() = sp.getBoolean("grid", false)
         set(v) = sp.edit().putBoolean("grid", v).apply()
 
+    /** The audiobook shelf as a grid of covers (true) or a list (false). Remembered between launches. */
+    var audioGridMode: Boolean
+        get() = sp.getBoolean("audio_grid", false)
+        set(v) = sp.edit().putBoolean("audio_grid", v).apply()
+
+    /** Which shelf the library shows: false = books, true = audiobooks. Remembered between launches. */
+    var audioTab: Boolean
+        get() = sp.getBoolean("audio_tab", false)
+        set(v) = sp.edit().putBoolean("audio_tab", v).apply()
+
     // --- covers ---------------------------------------------------------------------------
 
     private fun coverFile(id: String) = File(coverDir, "$id.jpg")
