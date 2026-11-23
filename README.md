@@ -67,3 +67,7 @@ Then `./gradlew assembleRelease` produces `app/build/outputs/apk/release/app-rel
 - The only dependency is [libarchive-android](https://github.com/zhanghai/libarchive-android) (for RAR/7z/tar comics).
   Third-party licenses are in `app/src/main/assets/THIRD-PARTY.txt` and `WORDNET-LICENSE.txt`.
 - No license has been chosen for Leaflet's own code yet.
+
+## License
+
+GPL-3.0. See [LICENSE](LICENSE). Free software: you can use, change and share it, and anything you share based on it must stay GPL-3.0 with its source available.

@@ -177,7 +177,7 @@ class LibraryActivity : Activity() {
                 typeface = Typeface.create("serif", Typeface.BOLD)
             })
             if (version != null) addView(TextView(context).apply {
-                text = "version $version"; textSize = 12f; setTextColor(0xFFB9D1BF.toInt())
+                text = "version $version · GPL-3.0"; textSize = 12f; setTextColor(0xFFB9D1BF.toInt())
             })
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         toggle = ImageView(this).apply {
