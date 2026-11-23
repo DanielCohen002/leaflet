@@ -237,14 +237,14 @@ class AudioService : Service() {
         handler.postDelayed(ticker, 1000)
     }
 
-    fun pause() {
-        resumeAfterFocus = false
+    fun pause(keepFocus: Boolean = false) {
+        if (!keepFocus) resumeAfterFocus = false
         pausedForSilence = false
         if (!wantPlay) return
         wantPlay = false
         try { if (prepared) player?.pause() } catch (_: Throwable) { }
         saveNow()
-        abandonFocus()
+        if (!keepFocus) abandonFocus()
         leaveForeground()
         updateSession()
         onChange?.invoke()
@@ -403,12 +403,14 @@ class AudioService : Service() {
     // --- audio focus ------------------------------------------------------------------------
 
     private fun requestFocus(): Boolean {
+        // Reuse the registered request (kept across a transient loss) so the GAIN callback still arrives.
+        focusRequest?.let { return audio.requestAudioFocus(it) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED }
         val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
             .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
             .setOnAudioFocusChangeListener({ change ->
                 when (change) {
                     AudioManager.AUDIOFOCUS_LOSS -> pause()
-                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> if (wantPlay) { resumeAfterFocus = true; pause() }
+                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> if (wantPlay) { pause(keepFocus = true); resumeAfterFocus = true }
                     AudioManager.AUDIOFOCUS_GAIN -> if (resumeAfterFocus) { resumeAfterFocus = false; play() }
                 }
             }, handler)
