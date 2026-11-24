@@ -9,10 +9,12 @@ class ThemeColors(val name: String, val fg: Int, val bg: Int)
 object Themes {
     val all = listOf(
         ThemeColors("Light", 0xFF1A1A1A.toInt(), 0xFFFAFAFA.toInt()),
-        ThemeColors("Sepia", 0xFF4B3621.toInt(), 0xFFF4ECD8.toInt()),
+        ThemeColors("Latte", 0xFF4B3621.toInt(), 0xFFF4ECD8.toInt()),
         ThemeColors("Dark", 0xFFD0D0D0.toInt(), 0xFF000000.toInt()),
-        ThemeColors("Inverted sepia", 0xFFE4D4B8.toInt(), 0xFF2A2019.toInt()),
+        ThemeColors("Coffee", 0xFFE4D4B8.toInt(), 0xFF2A2019.toInt()),
     )
+    /** Order shown in the settings row (the saved theme numbers keep their old meaning): Light, Latte, Coffee, Dark. */
+    val rowOrder = listOf(0, 1, 3, 2)
 }
 
 object Fonts {

@@ -5,6 +5,7 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Bitmap
 import android.util.LruCache
+import android.view.ViewConfiguration
 import android.widget.GridView
 import android.net.Uri
 import android.provider.DocumentsContract
@@ -51,6 +52,7 @@ class LibraryActivity : Activity() {
     private lateinit var audioGrid: GridView
     private lateinit var audioEmpty: View
     private lateinit var tabBooks: TextView
+    private lateinit var shelfHost: FrameLayout
     private lateinit var tabAudio: TextView
     private lateinit var addButton: Button
 
@@ -437,6 +439,109 @@ class LibraryActivity : Activity() {
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
+    private fun switchShelf(audio: Boolean) {
+        if (library.audioTab == audio) return
+        selected.clear(); library.audioTab = audio; library.shelfAudio = audio; applyMode(); updateSelection()
+    }
+
+    // Swiping sideways on the shelf slides between Books and Audiobooks, following the finger.
+    private var swipeX = 0f
+    private var swipeY = 0f
+    private var swipeT = 0L
+    private var swipeDragging = false
+    private var swipeTarget = false          // the shelf being slid in: true = Audiobooks
+    private var swipeVelocity: android.view.VelocityTracker? = null
+
+    private fun shelfViews(audio: Boolean) = if (audio) listOf(audioList, audioGrid, audioEmpty) else listOf(list, grid, empty)
+
+    /** Which views of a shelf are showing (the same rule as [applyMode]). */
+    private fun shelfVisible(audio: Boolean, v: View): Boolean {
+        val grid = if (audio) library.audioGridMode else library.gridMode
+        val has = if (audio) audioBooks.isNotEmpty() else entries.isNotEmpty()
+        return when (v) {
+            empty, audioEmpty -> !has
+            list, audioList -> has && !grid
+            else -> has && grid
+        }
+    }
+
+    private fun slideShelves(tx: Float) {
+        val w = shelfHost.width.toFloat()
+        val other = if (swipeTarget) tx + w else tx - w          // the incoming shelf waits one width off to the side
+        for (v in shelfViews(!swipeTarget)) v.translationX = tx
+        for (v in shelfViews(swipeTarget)) v.translationX = other
+    }
+
+    private fun endSlide(commit: Boolean) {
+        val w = shelfHost.width.toFloat()
+        val from = shelfViews(!swipeTarget).firstOrNull { it.visibility == View.VISIBLE }?.translationX ?: 0f
+        val to = if (commit) (if (swipeTarget) -w else w) else 0f
+        android.animation.ValueAnimator.ofFloat(from, to).apply {
+            duration = (220 * Math.abs(to - from) / w).toLong().coerceIn(80, 220)
+            interpolator = android.view.animation.DecelerateInterpolator()
+            addUpdateListener { slideShelves(it.animatedValue as Float) }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    for (v in shelfViews(true) + shelfViews(false)) v.translationX = 0f
+                    swipeDragging = false
+                    if (commit) switchShelf(swipeTarget) else applyMode()
+                }
+            })
+            start()
+        }
+    }
+
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        if (!::shelfHost.isInitialized) return super.dispatchTouchEvent(ev)
+        when (ev.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> {
+                swipeX = ev.x; swipeY = ev.y; swipeT = ev.eventTime
+                swipeVelocity?.recycle(); swipeVelocity = android.view.VelocityTracker.obtain()
+            }
+            android.view.MotionEvent.ACTION_MOVE -> {
+                swipeVelocity?.addMovement(ev)
+                val dx = ev.x - swipeX
+                val dy = ev.y - swipeY
+                if (!swipeDragging) {
+                    val onShelf = ev.y > shelfHost.top && ev.y < shelfHost.bottom
+                    val toAudio = dx < 0
+                    if (onShelf && Math.abs(dx) > ViewConfiguration.get(this).scaledTouchSlop * 2 && Math.abs(dx) > Math.abs(dy) * 1.5f &&
+                        toAudio != library.audioTab && !shelfAnimating()) {
+                        swipeDragging = true
+                        swipeTarget = toAudio
+                        val cancel = android.view.MotionEvent.obtain(ev).apply { action = android.view.MotionEvent.ACTION_CANCEL }
+                        super.dispatchTouchEvent(cancel); cancel.recycle()
+                        for (v in shelfViews(swipeTarget)) v.visibility = if (shelfVisible(swipeTarget, v)) View.VISIBLE else View.GONE
+                        slideShelves(0f)
+                    }
+                }
+                if (swipeDragging) {
+                    val w = shelfHost.width.toFloat()
+                    slideShelves(if (swipeTarget) dx.coerceIn(-w, 0f) else dx.coerceIn(0f, w))
+                    return true
+                }
+            }
+            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                if (swipeDragging) {
+                    swipeVelocity?.addMovement(ev)
+                    swipeVelocity?.computeCurrentVelocity(1000)
+                    val vx = swipeVelocity?.xVelocity ?: 0f
+                    val dx = ev.x - swipeX
+                    val w = shelfHost.width.toFloat()
+                    val flung = Math.abs(vx) > 900 && (vx < 0) == swipeTarget
+                    val commit = ev.actionMasked == android.view.MotionEvent.ACTION_UP && (Math.abs(dx) > w * 0.3f || flung)
+                    endSlide(commit)
+                    swipeVelocity?.recycle(); swipeVelocity = null
+                    return true
+                }
+                swipeVelocity?.recycle(); swipeVelocity = null
+            }
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
+    private fun shelfAnimating() = swipeDragging
+
     private fun rounded(color: Int, radiusDp: Int) = GradientDrawable().apply {
         setColor(color); cornerRadius = radiusDp * resources.displayMetrics.density
     }
@@ -508,7 +613,7 @@ class LibraryActivity : Activity() {
         fun tab(label: String, audio: Boolean) = TextView(this).apply {
             text = label; textSize = 15f; gravity = Gravity.CENTER
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            setOnClickListener { selected.clear(); library.audioTab = audio; library.shelfAudio = audio; applyMode(); updateSelection() }
+            setOnClickListener { switchShelf(audio) }
         }
         tabBooks = tab("Books", false); tabAudio = tab("Audiobooks", true)
         val tabs = LinearLayout(this).apply { setPadding(dp(16), 0, dp(16), dp(4)) }
@@ -534,6 +639,8 @@ class LibraryActivity : Activity() {
         selectionBar.addView(selectionButton("Remove") { confirmRemoveSelected() }.apply { setTextColor(0xFFFFB4A8.toInt()) })
         root.addView(selectionBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { marginStart = dp(16); marginEnd = dp(16); bottomMargin = dp(4) })
 
+        shelfHost = FrameLayout(this)
+        root.addView(shelfHost, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         list = ListView(this).apply {
             divider = ColorDrawable(Color.TRANSPARENT)
             dividerHeight = dp(10)
@@ -555,7 +662,7 @@ class LibraryActivity : Activity() {
         list.adapter = adapter
         list.setOnItemClickListener { _, _, pos, _ -> openBook(entries[pos]) }
         list.setOnItemLongClickListener { _, _, pos, _ -> showOptions(entries[pos]); true }
-        root.addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        shelfHost.addView(list, FrameLayout.LayoutParams(-1, -1))
 
         // Grid of covers: as many columns as fit (at least two), each cell a 2:3 cover with the title underneath.
         val usable = resources.displayMetrics.widthPixels - dp(32)
@@ -575,8 +682,8 @@ class LibraryActivity : Activity() {
             setOnItemLongClickListener { _, _, pos, _ -> showOptions(entries[pos]); true }
             visibility = View.GONE
         }
-        root.addView(grid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        root.addView(empty, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        shelfHost.addView(grid, FrameLayout.LayoutParams(-1, -1))
+        shelfHost.addView(empty, FrameLayout.LayoutParams(-1, -1))
         audioList = ListView(this).apply {
             divider = ColorDrawable(Color.TRANSPARENT)
             dividerHeight = dp(10)
@@ -589,7 +696,7 @@ class LibraryActivity : Activity() {
             setOnItemLongClickListener { _, _, pos, _ -> toggleSelect(audioRows[pos]); true }
             visibility = View.GONE
         }
-        root.addView(audioList, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        shelfHost.addView(audioList, FrameLayout.LayoutParams(-1, -1))
         audioGrid = GridView(this).apply {
             numColumns = gridCols
             columnWidth = gridCellW
@@ -604,7 +711,7 @@ class LibraryActivity : Activity() {
             setOnItemLongClickListener { _, _, pos, _ -> toggleSelect(audioRows[pos]); true }
             visibility = View.GONE
         }
-        root.addView(audioGrid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        shelfHost.addView(audioGrid, FrameLayout.LayoutParams(-1, -1))
         audioEmpty = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -616,7 +723,7 @@ class LibraryActivity : Activity() {
             })
             visibility = View.GONE
         }
-        root.addView(audioEmpty, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        shelfHost.addView(audioEmpty, FrameLayout.LayoutParams(-1, -1))
         val refreshBooks = {
             if (library.syncFolder == null) toast("No synced folder yet. Use Add books and choose a folder to sync.") else syncFolder(quiet = false)
         }

@@ -153,7 +153,7 @@ class Fb2Book(file: File) : Book {
     override fun load(index: Int, maxW: Int, maxH: Int): Spanned =
         HtmlText.page(parts[index], maxW, maxH, links.collector(index)) { src, w, hh, up ->
             binaries[src.removePrefix("#")]?.let { b64 ->
-                try { ImageUtil.decode(Base64.decode(b64, Base64.DEFAULT), w, hh, up) } catch (_: Throwable) { null }
+                try { ImageUtil.decode(Base64.decode(b64, Base64.DEFAULT), w, hh, up, bigFill = true) } catch (_: Throwable) { null }
             }
         }
 

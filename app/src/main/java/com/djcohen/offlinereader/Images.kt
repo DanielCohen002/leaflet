@@ -37,7 +37,7 @@ object ImageBooks {
 
 object ImageUtil {
     /** Decode [bytes], sub-sampling large images; scale to fit [maxW] x [maxH] (enlarging too when [upscale]). */
-    fun decode(bytes: ByteArray, maxW: Int, maxH: Int, upscale: Boolean = false, maxPixels: Long = 12_000_000L): Bitmap? {
+    fun decode(bytes: ByteArray, maxW: Int, maxH: Int, upscale: Boolean = false, maxPixels: Long = 12_000_000L, bigFill: Boolean = false): Bitmap? {
         return try {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
@@ -48,7 +48,9 @@ object ImageUtil {
             while ((bounds.outWidth / sample).toLong() * (bounds.outHeight / sample) > maxPixels) sample *= 2
             val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
                 ?: return null
-            val scale = minOf(maxW.toFloat() / bmp.width, maxH.toFloat() / bmp.height, if (upscale) Float.MAX_VALUE else 1f)
+            // In text books a real picture (a map, a diagram) is enlarged to the page; tiny ones (ornaments, inline glyphs) are not.
+            val enlarge = upscale || (bigFill && bounds.outWidth >= 240 && bounds.outHeight >= 120)
+            val scale = minOf(maxW.toFloat() / bmp.width, maxH.toFloat() / bmp.height, if (enlarge) Float.MAX_VALUE else 1f)
             if (scale != 1f) Bitmap.createScaledBitmap(
                 bmp, (bmp.width * scale).toInt().coerceAtLeast(1), (bmp.height * scale).toInt().coerceAtLeast(1), true,
             ) else bmp

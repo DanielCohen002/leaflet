@@ -502,7 +502,7 @@ class MobiBook(file: File) : Book {
                 }
                 else -> null
             }
-            if (record == null || record < 0) null else ImageUtil.decode(rec(record), w, h, up)
+            if (record == null || record < 0) null else ImageUtil.decode(rec(record), w, h, up, bigFill = true)
         }
 
     override fun resolveLink(chapter: Int, href: String) = links.resolve(chapter, href)

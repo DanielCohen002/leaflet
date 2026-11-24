@@ -185,10 +185,25 @@ class ReaderActivity : Activity() {
     }
 
     private fun setOverlay(show: Boolean) {
+        if (show == overlayVisible && (show == (topBar.visibility == View.VISIBLE))) return
         overlayVisible = show
-        val v = if (show) View.VISIBLE else View.GONE
-        topBar.visibility = v
-        bottomBar.visibility = v
+        // The bars slide in from the top and bottom edges, and back out again.
+        fun slide(bar: View, fromEdge: Float) {
+            bar.animate().cancel()
+            val away = if (bar.height > 0) fromEdge * bar.height else fromEdge * dp(90)
+            if (show) {
+                bar.visibility = View.VISIBLE
+                bar.translationY = away
+                bar.animate().translationY(0f).setDuration(160).start()
+            } else if (bar.visibility == View.VISIBLE) {
+                bar.animate().translationY(away).setDuration(140).withEndAction {
+                    if (!overlayVisible) bar.visibility = View.GONE
+                    bar.translationY = 0f
+                }.start()
+            }
+        }
+        slide(topBar, -1f)
+        slide(bottomBar, 1f)
     }
 
     // --- navigation ------------------------------------------------------------------------
@@ -209,8 +224,8 @@ class ReaderActivity : Activity() {
             val start = if (anchor != null) (b.anchorOffset(index, anchor) ?: offset) else offset
             ui.post {
                 chapter = index
-                page.footerText = b.chapterTitles[index]
-                page.setContent(text, start)
+                page.footerProvider = { off -> b.titleAt(index, off) }
+                page.setContent(text, start, b.chapterStarts(index))
                 loading = false
             }
         }
@@ -271,19 +286,36 @@ class ReaderActivity : Activity() {
         }
     }
 
+    /** Index in the contents list of the entry the reader is in now. */
+    private fun currentTocIndex(b: Book): Int {
+        val toc = b.toc
+        val here = page.currentOffset
+        var best = 0
+        for ((i, e) in toc.withIndex()) {
+            if (e.chapter < chapter) best = i
+            else if (e.chapter == chapter) {
+                val at = if (e.anchor == null) 0 else b.anchorOffset(chapter, e.anchor) ?: continue
+                if (at <= here) best = i
+            }
+        }
+        return best
+    }
+
     private fun skipChapter(delta: Int) {
         val b = book ?: return
-        val target = chapter + delta
-        if (loading || target !in b.chapterTitles.indices) return
-        loadChapter(target, 0)
+        if (loading) return
+        val toc = b.toc
+        val e = toc.getOrNull(currentTocIndex(b) + delta) ?: return
+        loadChapter(e.chapter, 0, e.anchor)
     }
 
     private fun showChapters() {
         val b = book ?: return
         AlertDialog.Builder(this)
             .setTitle("Chapters")
-            .setSingleChoiceItems(b.chapterTitles.toTypedArray(), chapter) { d, which ->
-                d.dismiss(); setOverlay(false); loadChapter(which, 0)
+            .setSingleChoiceItems(b.toc.map { it.title }.toTypedArray(), currentTocIndex(b)) { d, which ->
+                val e = b.toc[which]
+                d.dismiss(); setOverlay(false); loadChapter(e.chapter, 0, e.anchor)
             }
             .setNegativeButton("Close", null)
             .showLeaf()
@@ -484,13 +516,29 @@ class ReaderActivity : Activity() {
         })
 
         label("Colors")
-        val group = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
-        Themes.all.forEachIndexed { i, t ->
-            group.addView(RadioButton(this).apply { text = if (i == 2) "Dark (inverted)" else t.name; id = 1000 + i })
+        val swatchRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val swatches = ArrayList<Pair<Int, TextView>>()
+        fun paintSwatches() {
+            for ((i, v) in swatches) {
+                val t = Themes.all[i]
+                v.background = android.graphics.drawable.GradientDrawable().apply {
+                    setColor(t.bg); cornerRadius = dp(10).toFloat()
+                    setStroke(dp(if (i == prefs.theme) 3 else 1), if (i == prefs.theme) 0xFF3B82F6.toInt() else 0x55888888)
+                }
+            }
         }
-        group.check(1000 + prefs.theme)
-        group.setOnCheckedChangeListener { _, checked -> prefs.theme = checked - 1000; applyStyle() }
-        box.addView(group)
+        for (i in Themes.rowOrder) {
+            val t = Themes.all[i]
+            val v = TextView(this).apply {
+                text = "Aa\n${t.name}"; gravity = Gravity.CENTER; setTextColor(t.fg); textSize = 14f
+                setPadding(0, dp(10), 0, dp(10))
+                setOnClickListener { prefs.theme = i; applyStyle(); paintSwatches() }
+            }
+            swatches += i to v
+            swatchRow.addView(v, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(dp(3), 0, dp(3), 0) })
+        }
+        paintSwatches()
+        box.addView(swatchRow)
 
         label("Page turn")
         val turnGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }

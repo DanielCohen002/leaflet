@@ -45,6 +45,10 @@ class PageView(context: Context) : View(context) {
     /** Called with the href of a link the reader tapped. */
     var onLink: ((String) -> Unit)? = null
     var footerText: String = ""
+    /** If set, gives the footer title for the page whose first character is at the given offset (overrides [footerText]). */
+    var footerProvider: ((Int) -> String)? = null
+    /** Character offsets where a new page must begin (chapter starts inside the text). */
+    private var breaks = IntArray(0)
 
     private val density = resources.displayMetrics.density
     private val paint = TextPaint(Paint.ANTI_ALIAS_FLAG)
@@ -114,7 +118,7 @@ class PageView(context: Context) : View(context) {
     val contentHeight get() = (height - insetT - insetB - vMargin - footerHeight).coerceAtLeast(100)
     private val margin get() = (22 * density).toInt()
     private val vMargin get() = (14 * density).toInt()
-    private val footerHeight get() = (footerPaint.textSize + 14 * density).toInt()
+    private val footerHeight get() = (footerPaint.textSize + 6 * density).toInt()
 
     /** Character offset at the top of the current page, used to save and restore the reading position. */
     val currentOffset: Int
@@ -236,15 +240,16 @@ class PageView(context: Context) : View(context) {
         indentPx = (indentEm * paint.textSize).toInt()
         footerPaint.color = (fgColor and 0x00FFFFFF) or 0xBB000000.toInt()
         footerPaint.typeface = typeface
-        footerPaint.textSize = maxOf(paint.textSize * 0.85f, 16 * density)
+        footerPaint.textSize = android.util.TypedValue.applyDimension(android.util.TypedValue.COMPLEX_UNIT_SP, 11f, resources.displayMetrics)
         fg = fgColor; bg = bgColor; spacingMult = spacing
         relayout(keep)
         invalidate()
     }
 
     /** Show [content], opening at the page containing [offset]; a negative offset opens on the last page. */
-    fun setContent(content: Spanned, offset: Int) {
+    fun setContent(content: Spanned, offset: Int, pageBreaks: List<Int> = emptyList()) {
         clearSelection()
+        breaks = pageBreaks.sorted().toIntArray()
         raw = content
         text = content
         relayout(offset)
@@ -275,12 +280,19 @@ class PageView(context: Context) : View(context) {
             starts += line
             val top = l.getLineTop(line)
             var end = line
-            while (end + 1 < l.lineCount && l.getLineBottom(end + 1) - top <= avail) end++
+            while (end + 1 < l.lineCount && l.getLineBottom(end + 1) - top <= avail && !startsChapter(l, end + 1)) end++
             line = end + 1
         }
         if (starts.isEmpty()) starts += 0
         pageStartLines = starts.toIntArray()
         page = if (offset < 0) pageStartLines.size - 1 else pageForOffset(offset)
+    }
+
+    /** True if a chapter starts on [line], so that line has to open a new page. */
+    private fun startsChapter(l: StaticLayout, line: Int): Boolean {
+        if (breaks.isEmpty()) return false
+        val a = l.getLineStart(line); val b = l.getLineEnd(line)
+        return breaks.any { it in a until b }
     }
 
     /** Show the page (or scroll position) containing character [offset]; used when following a link or going back. */
@@ -449,9 +461,9 @@ class PageView(context: Context) : View(context) {
 
     private fun startTurn(forward: Boolean) {
         if (turnStyle == STYLE_CURL) {
-            if (forward) runTurn(true, 0f, 1f, corner(), curlEnd(), true, 520)
-            else { setCurl(curlEnd()); runTurn(true, 0f, 1f, curlEnd(), corner(), true, 520) }
-        } else runTurn(true, 0f, 1f, null, null, false, 400)
+            if (forward) runTurn(true, 0f, 1f, corner(), curlEnd(), true, 360)
+            else { setCurl(curlEnd()); runTurn(true, 0f, 1f, curlEnd(), corner(), true, 360) }
+        } else runTurn(true, 0f, 1f, null, null, false, 210)
     }
 
     /** Animates slide/flip progress from [p0] to [p1], or the curl corner from [s] to [e]; [commit] turns the page at the end. */
@@ -512,7 +524,7 @@ class PageView(context: Context) : View(context) {
         if (turnStyle == STYLE_SLIDE) {
             val commit = turnProg > 0.25f
             val left = if (commit) 1f - turnProg else turnProg
-            runTurn(commit, turnProg, if (commit) 1f else 0f, null, null, false, (400 * left).toLong().coerceAtLeast(120))
+            runTurn(commit, turnProg, if (commit) 1f else 0f, null, null, false, (210 * left).toLong().coerceAtLeast(90))
         } else {
             val commit = curlP[0] < width * 0.5f
             runTurn(commit, 0f, 1f, curlP.copyOf(), if (commit) curlEnd() else corner(), false, 360)
@@ -672,16 +684,17 @@ class PageView(context: Context) : View(context) {
             canvas.drawCircle(b[0], b[1] + handleRadius, handleRadius, handlePaint)
         }
 
-        val y = height - insetB - 8 * density
+        val y = height - insetB - 6 * density
         val x0 = (insetL + margin).toFloat()
         val x1 = (width - insetR - margin).toFloat()
         val count = if (scrollMode) "${(scrollPx * 100L / maxScroll().coerceAtLeast(1)).toInt()}%" else "${page + 1} / $pageCount"
         footerPaint.textAlign = Paint.Align.RIGHT
         canvas.drawText(count, x1, y, footerPaint)
         val room = (x1 - x0) - footerPaint.measureText(count) - 16 * density
-        if (footerText.isNotEmpty() && room > 40 * density) {
+        val title = footerProvider?.invoke(if (pageStartLines.isEmpty() || scrollMode) currentOffset else l.getLineStart(firstLine())) ?: footerText
+        if (title.isNotEmpty() && room > 40 * density) {
             footerPaint.textAlign = Paint.Align.LEFT
-            canvas.drawText(TextUtils.ellipsize(footerText, footerPaint, room, TextUtils.TruncateAt.END).toString(), x0, y, footerPaint)
+            canvas.drawText(TextUtils.ellipsize(title, footerPaint, room, TextUtils.TruncateAt.END).toString(), x0, y, footerPaint)
         }
     }
 

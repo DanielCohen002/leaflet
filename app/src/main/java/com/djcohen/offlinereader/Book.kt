@@ -34,8 +34,20 @@ interface Book {
     fun resolveLink(chapter: Int, href: String): LinkTarget? = null
     /** Character offset of the named spot [id] in [chapter]; known once that chapter has been loaded. */
     fun anchorOffset(chapter: Int, id: String): Int? = null
+    /**
+     * The contents list shown in the Chapters dialog. A file can hold many chapters (the contents then points into it
+     * with "file.html#spot"), so this can be longer than [chapterTitles], which has one entry per file.
+     */
+    val toc: List<TocEntry> get() = chapterTitles.mapIndexed { i, t -> TocEntry(t, i, null) }
+    /** The contents title that applies at character [offset] of [chapter] (known once that chapter has been loaded). */
+    fun titleAt(chapter: Int, offset: Int): String = chapterTitles.getOrElse(chapter) { "" }
+    /** Offsets in [chapter] where a contents entry starts partway through the file; pages are broken there. */
+    fun chapterStarts(chapter: Int): List<Int> = emptyList()
     fun close()
 }
+
+/** One line of the contents: opens [chapter] (a file) at the spot named [anchor], or at its start when that is null. */
+class TocEntry(val title: String, val chapter: Int, val anchor: String?)
 
 /** The destination of a link: a chapter plus (optionally) a named spot in it. [external] links go to the web. */
 class LinkTarget(val chapter: Int, val anchor: String?, val external: Boolean = false)
@@ -95,6 +107,9 @@ internal object HtmlText {
     private val style = Regex("(?is)<style\\b.*?</style>")
     private val script = Regex("(?is)<script\\b.*?</script>")
     private val svgImage = Regex("(?is)<image\\b[^>]*?href\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>")
+    // A big first letter in its own element, then a line break inside a whitespace-only element, then the rest of the word
+    // (A, then a span holding only a line break, then "zoth"): the line break would turn into a space and split the word.
+    private val dropCapGap = Regex("(>[A-Z]</[A-Za-z]+>(?:</[A-Za-z]+>)*)\\s*<span[^>]*>\\s*\\n\\s*</span>(?=[a-z])")
     private val prolog = Regex("(?is)<\\?xml.*?\\?>|<!DOCTYPE[^>]*>")
 
     // Start tags, and the id / name attributes that make a spot in the text linkable.
@@ -128,7 +143,7 @@ internal object HtmlText {
         html: String, images: ((String, Int, Int) -> Bitmap?)?, maxW: Int, maxH: Int,
         anchors: MutableMap<String, Int>? = null,
     ): Spanned {
-        var cleaned = html.replace(prolog, "").replace(svgImage, "<img src=\"$1\"/>").replace(head, "").replace(style, "").replace(script, "")
+        var cleaned = html.replace(dropCapGap, "$1").replace(prolog, "").replace(svgImage, "<img src=\"$1\"/>").replace(head, "").replace(style, "").replace(script, "")
         val ids = ArrayList<String>()
         if (anchors != null) cleaned = markAnchors(cleaned, ids)
         val getter = Html.ImageGetter { src ->
@@ -296,6 +311,8 @@ class EpubBook(file: File) : Book {
         private set
     override val chapterTitles: List<String> get() = titles
     private var coverPath: String? = null
+    /** Every contents line as (file, spot in the file or null, label), in contents order. */
+    private val tocRaw = mutableListOf<Triple<String, String?, String>>()
 
     init {
         val container = readText("META-INF/container.xml") ?: throw IllegalArgumentException("Not an EPUB")
@@ -362,13 +379,100 @@ class EpubBook(file: File) : Book {
         for ((i, path) in spine.withIndex()) titles += labels[path]?.takeIf { it.isNotBlank() } ?: "Section ${i + 1}"
     }
 
+
+    private fun addToc(path: String, fragment: String?, label: String, out: MutableMap<String, String>) {
+        if (path.isEmpty()) return
+        tocRaw += Triple(path, fragment?.takeIf { it.isNotEmpty() }?.let { Uri.decode(it) }, label)
+        if (path !in out) out[path] = label
+    }
+
+    /**
+     * Many books have a fuller contents page inside the text than in their table of contents (the NCX here listed 50 of
+     * 66 chapters). Links near the start of the book that point forward to a spot in the book are collected as extra entries.
+     */
+    private fun contentsPageLinks(): List<Triple<String, String?, String>> {
+        val found = ArrayList<Triple<String, String?, String>>()
+        val link = Regex("(?is)<a\\b[^>]*?href\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>")
+        val scheme = Regex("^[A-Za-z][A-Za-z0-9+.-]*:")
+        for (i in 0 until minOf(3, spine.size)) {
+            val path = spine[i]
+            if (path.substringAfterLast('.').lowercase() in setOf("jpg", "jpeg", "png", "gif", "webp")) continue
+            val html = readText(path) ?: continue
+            val dir = path.substringBeforeLast('/', "")
+            for (m in link.findAll(html)) {
+                val href = m.groupValues[1]
+                if (scheme.containsMatchIn(href)) continue
+                val label = Html.fromHtml(m.groupValues[2], Html.FROM_HTML_MODE_COMPACT).toString().trim().replace(Regex("\\s+"), " ")
+                if (label.length > 60 || label.count { it.isLetter() } < 2) continue
+                val filePart = href.substringBefore('#')
+                val frag = if ('#' in href) Uri.decode(href.substringAfter('#')).takeIf { it.isNotEmpty() } else null
+                val target = if (filePart.isEmpty()) path else resolve(dir, filePart)
+                val ti = spine.indexOf(target)
+                if (ti < i) continue                                   // links back to earlier text are not contents lines
+                if (ti == i) {
+                    if (frag == null) continue
+                    val at = idPosition(html, frag)
+                    if (at < 0 || at < m.range.first) continue
+                }
+                found += Triple(target, frag, label)
+            }
+        }
+        return found
+    }
+
+    private fun idPosition(html: String, id: String): Int {
+        val q = Regex.escape(id)
+        return Regex("(?i)\\s(?:id|name)\\s*=\\s*[\"']$q[\"']").find(html)?.range?.first ?: -1
+    }
+
+    private val tocEntries: List<TocEntry> by lazy {
+        var raw: List<Triple<String, String?, String>> = tocRaw
+        val extra = try { contentsPageLinks() } catch (_: Throwable) { emptyList() }
+        if (extra.distinctBy { it.first to it.second }.size > raw.distinctBy { it.first to it.second }.size) {
+            val seen = HashSet<Pair<String, String?>>()
+            val html = HashMap<String, String>()
+            fun pos(e: Triple<String, String?, String>): Int =
+                if (e.second == null) 0 else idPosition(html.getOrPut(e.first) { readText(e.first) ?: "" }, e.second!!).coerceAtLeast(0)
+            val all = tocRaw + extra
+            raw = all.filter { seen.add(it.first to it.second) }
+                .filterNot { e -> e.second == null && all.any { o -> o.second != null && o.first == e.first && o.third == e.third } }
+                .sortedWith(compareBy({ spine.indexOf(it.first) }, { pos(it) }))
+        }
+        val byPath = raw.groupBy { it.first }
+        val list = ArrayList<TocEntry>()
+        for ((i, path) in spine.withIndex()) {
+            val es = byPath[path]?.distinctBy { it.second }
+            if (es.isNullOrEmpty()) list += TocEntry(titles[i], i, null)
+            else for (e in es) list += TocEntry(e.third, i, e.second)
+        }
+        list
+    }
+    private val tocByChapter: Map<Int, List<TocEntry>> by lazy { tocEntries.groupBy { it.chapter } }
+
+    override val toc: List<TocEntry> get() = tocEntries
+
+    override fun titleAt(chapter: Int, offset: Int): String {
+        val es = tocByChapter[chapter] ?: return titles.getOrElse(chapter) { "" }
+        var best: TocEntry? = null
+        for (e in es) {
+            val at = if (e.anchor == null) 0 else anchorOffset(chapter, e.anchor) ?: continue
+            if (at <= offset) best = e
+        }
+        if (best != null) return best.title
+        // Text before the first contents entry of this file belongs to whatever came before it.
+        val idx = tocEntries.indexOf(es.first())
+        return if (idx > 0) tocEntries[idx - 1].title else title
+    }
+
+    override fun chapterStarts(chapter: Int): List<Int> =
+        tocByChapter[chapter].orEmpty().mapNotNull { e -> e.anchor?.let { anchorOffset(chapter, it) } }.filter { it > 0 }.distinct().sorted()
+
     private fun readNav(path: String, out: MutableMap<String, String>) {
         val dir = path.substringBeforeLast('/', "")
         val html = readText(path) ?: return
-        Regex("(?is)<a\\b[^>]*href\\s*=\\s*[\"']([^\"'#]*)[^\"']*[\"'][^>]*>(.*?)</a>").findAll(html).forEach { m ->
-            val label = Html.fromHtml(m.groupValues[2], Html.FROM_HTML_MODE_COMPACT).toString().trim().replace(Regex("\\s+"), " ")
-            val target = resolve(dir, m.groupValues[1])
-            if (label.isNotEmpty() && target !in out) out[target] = label
+        Regex("(?is)<a\\b[^>]*href\\s*=\\s*[\"']([^\"'#]*)(?:#([^\"']*))?[\"'][^>]*>(.*?)</a>").findAll(html).forEach { m ->
+            val label = Html.fromHtml(m.groupValues[3], Html.FROM_HTML_MODE_COMPACT).toString().trim().replace(Regex("\\s+"), " ")
+            if (label.isNotEmpty()) addToc(resolve(dir, m.groupValues[1]), m.groupValues[2], label, out)
         }
     }
 
@@ -385,10 +489,9 @@ class EpubBook(file: File) : Book {
                 when (p.name) {
                     "navLabel" -> inLabel = true
                     "content" -> {
-                        val src = p.getAttributeValue(null, "src")?.substringBefore('#')
-                        if (src != null && label != null) {
-                            val t = resolve(dir, src)
-                            if (t !in out) out[t] = label!!
+                        val full = p.getAttributeValue(null, "src")
+                        if (full != null && label != null) {
+                            addToc(resolve(dir, full.substringBefore('#')), full.substringAfter('#', ""), label!!, out)
                         }
                         label = null
                     }
@@ -479,7 +582,7 @@ class EpubBook(file: File) : Book {
     private fun loadImage(path: String, maxW: Int, maxH: Int, upscale: Boolean = false): Bitmap? {
         val e = zip.getEntry(path) ?: return null
         return try {
-            ImageUtil.decode(zip.getInputStream(e).use { it.readBytes() }, maxW, maxH, upscale)
+            ImageUtil.decode(zip.getInputStream(e).use { it.readBytes() }, maxW, maxH, upscale, bigFill = true)
         } catch (_: Throwable) { null }
     }
 
