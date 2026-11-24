@@ -508,7 +508,7 @@ class LibraryActivity : Activity() {
         fun tab(label: String, audio: Boolean) = TextView(this).apply {
             text = label; textSize = 15f; gravity = Gravity.CENTER
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            setOnClickListener { selected.clear(); library.audioTab = audio; applyMode(); updateSelection() }
+            setOnClickListener { selected.clear(); library.audioTab = audio; library.shelfAudio = audio; applyMode(); updateSelection() }
         }
         tabBooks = tab("Books", false); tabAudio = tab("Audiobooks", true)
         val tabs = LinearLayout(this).apply { setPadding(dp(16), 0, dp(16), dp(4)) }
@@ -633,9 +633,10 @@ class LibraryActivity : Activity() {
         intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data?.let { importUris(listOf(it), openFirst = true) }
 
         // Opening the app (not coming back to it) goes straight to the book you were reading.
-        if (savedInstanceState == null && !autoOpenDone && intent?.action != Intent.ACTION_VIEW && !library.audioTab) {
+        if (savedInstanceState == null && !autoOpenDone && intent?.action != Intent.ACTION_VIEW && !library.shelfAudio) {
             autoOpenDone = true
-            library.lastOpened()?.let { openBook(it) }
+            // Backing out of the reopened book lands on the Audiobooks shelf, like backing out of an audiobook.
+            library.lastOpened()?.let { library.audioTab = true; openBook(it) }
         }
     }
 

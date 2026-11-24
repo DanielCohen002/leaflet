@@ -34,6 +34,11 @@ class Library(private val context: Context) {
         get() = sp.getBoolean("audio_tab", false)
         set(v) = sp.edit().putBoolean("audio_tab", v).apply()
 
+    /** The shelf the user last picked by tapping a tab. Unlike [audioTab] the player does not change it; it decides whether launching reopens the last book. */
+    var shelfAudio: Boolean
+        get() = sp.getBoolean("shelf_audio", audioTab)
+        set(v) = sp.edit().putBoolean("shelf_audio", v).apply()
+
     // --- covers ---------------------------------------------------------------------------
 
     private fun coverFile(id: String) = File(coverDir, "$id.jpg")
