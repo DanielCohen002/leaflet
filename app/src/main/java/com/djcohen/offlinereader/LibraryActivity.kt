@@ -633,7 +633,7 @@ class LibraryActivity : Activity() {
         intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data?.let { importUris(listOf(it), openFirst = true) }
 
         // Opening the app (not coming back to it) goes straight to the book you were reading.
-        if (savedInstanceState == null && !autoOpenDone && intent?.action != Intent.ACTION_VIEW && !library.shelfAudio) {
+        if (savedInstanceState == null && !autoOpenDone && intent?.action != Intent.ACTION_VIEW && !intent.getBooleanExtra(EXTRA_NO_AUTO_OPEN, false) && !library.shelfAudio) {
             autoOpenDone = true
             // Backing out of the reopened book lands on the Audiobooks shelf, like backing out of an audiobook.
             library.lastOpened()?.let { library.audioTab = true; openBook(it) }
@@ -1081,6 +1081,7 @@ class LibraryActivity : Activity() {
 
     companion object {
         private var autoOpenDone = false
+        const val EXTRA_NO_AUTO_OPEN = "no_auto_open"
         private const val REQ_PICK = 1
         private const val REQ_FOLDER = 2
         private const val REQ_AUDIO_FILES = 3

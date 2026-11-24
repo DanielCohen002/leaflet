@@ -81,6 +81,17 @@ class AudioPlayerActivity : Activity() {
         override fun onServiceDisconnected(name: ComponentName?) { service = null }
     }
 
+    /** Back always goes to the library's Audiobooks tab, even if the player was opened on top of a book that is open. */
+    private fun backToLibrary() {
+        startActivity(Intent(this, LibraryActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            .putExtra(LibraryActivity.EXTRA_NO_AUTO_OPEN, true))
+        finish()
+    }
+
+    @Suppress("OVERRIDE_DEPRECATION")
+    override fun onBackPressed() = backToLibrary()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         lib = AudioLibrary(this)
@@ -112,7 +123,7 @@ class AudioPlayerActivity : Activity() {
             setPadding(dp(12), dp(12), dp(12), dp(12))
             background = pressable(circle(Color.TRANSPARENT), circle(0x33FFFFFF))
             contentDescription = "Back to the library"
-            setOnClickListener { finish() }
+            setOnClickListener { backToLibrary() }
         }, LinearLayout.LayoutParams(dp(52), dp(52)))
 
         // The cover takes whatever height is left, so nothing floats in empty space.
