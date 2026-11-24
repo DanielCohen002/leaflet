@@ -47,7 +47,8 @@ class AudioService : Service() {
     private var resumeAfterFocus = false
     /** Set when something else interrupted playback; the next play() steps back a few seconds so nothing is missed. */
     private var rewindOnPlay = false
-    private val rewindMs = 30_000L
+    private val rewindMs = 30_000L  // reopened from fully closed
+    private val interruptRewindMs = 5_000L  // interrupted by a notification, call or another app
     private var focusRequest: AudioFocusRequest? = null
     private var inForeground = false
     private var pausedForSilence = false
@@ -222,7 +223,7 @@ class AudioService : Service() {
         val atEnd = trackIndex == b.tracks.size - 1 && prepared && positionMs() >= b.tracks[trackIndex].durationMs - 1500
         if (atEnd) prepareTrack(0, 0)
         if (!requestFocus()) return
-        if (rewindOnPlay) { rewindOnPlay = false; if (!atEnd) seekOverall((overallMs() - rewindMs).coerceAtLeast(0)) }
+        if (rewindOnPlay) { rewindOnPlay = false; if (!atEnd) seekOverall((overallMs() - interruptRewindMs).coerceAtLeast(0)) }
         wantPlay = true
         try { startService(Intent(this, AudioService::class.java)) } catch (_: Throwable) { }
         enterForeground()
