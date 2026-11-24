@@ -84,6 +84,7 @@ class AudioPlayerActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         lib = AudioLibrary(this)
+        Library(this).audioTab = true  // going back from an audiobook always lands on the Audiobooks tab
         book = intent.getStringExtra(EXTRA_ID)?.let { lib.book(it) }
         val b = book
         if (b == null) { finish(); return }

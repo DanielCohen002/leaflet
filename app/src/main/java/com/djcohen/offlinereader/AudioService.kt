@@ -45,6 +45,9 @@ class AudioService : Service() {
     private var pendingSeek = 0L
     private var wantPlay = false
     private var resumeAfterFocus = false
+    /** Set when something else interrupted playback; the next play() steps back a few seconds so nothing is missed. */
+    private var rewindOnPlay = false
+    private val rewindMs = 3000L
     private var focusRequest: AudioFocusRequest? = null
     private var inForeground = false
     private var pausedForSilence = false
@@ -143,7 +146,7 @@ class AudioService : Service() {
         speed = lib.speed(b.id)
         val (t, ms) = lib.position(b.id)
         val idx = t.coerceIn(0, b.tracks.size - 1)
-        prepareTrack(idx, if (idx == t) ms else 0L)
+        prepareTrack(idx, if (idx == t) (ms - rewindMs).coerceAtLeast(0) else 0L)  // reopened: step back a little
         updateSession()
         onChange?.invoke()
     }
@@ -219,6 +222,7 @@ class AudioService : Service() {
         val atEnd = trackIndex == b.tracks.size - 1 && prepared && positionMs() >= b.tracks[trackIndex].durationMs - 1500
         if (atEnd) prepareTrack(0, 0)
         if (!requestFocus()) return
+        if (rewindOnPlay) { rewindOnPlay = false; if (!atEnd) seekOverall((overallMs() - rewindMs).coerceAtLeast(0)) }
         wantPlay = true
         try { startService(Intent(this, AudioService::class.java)) } catch (_: Throwable) { }
         enterForeground()
@@ -409,8 +413,8 @@ class AudioService : Service() {
             .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
             .setOnAudioFocusChangeListener({ change ->
                 when (change) {
-                    AudioManager.AUDIOFOCUS_LOSS -> pause()
-                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> if (wantPlay) { pause(keepFocus = true); resumeAfterFocus = true }
+                    AudioManager.AUDIOFOCUS_LOSS -> { if (wantPlay) rewindOnPlay = true; pause() }
+                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> if (wantPlay) { pause(keepFocus = true); resumeAfterFocus = true; rewindOnPlay = true }
                     AudioManager.AUDIOFOCUS_GAIN -> if (resumeAfterFocus) { resumeAfterFocus = false; play() }
                 }
             }, handler)

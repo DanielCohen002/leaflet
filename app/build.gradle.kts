@@ -21,8 +21,8 @@ android {
         applicationId = "com.djcohen.leaflet"
         minSdk = 30
         targetSdk = 36
-        versionCode = 17
-        versionName = "1.7.2"
+        versionCode = 18
+        versionName = "1.8.0"
         // 64-bit phones only: keeps the bundled archive library (RAR/7z support) from bloating the APK.
         ndk { abiFilters += listOf("arm64-v8a") }
     }
