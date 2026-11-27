@@ -42,6 +42,12 @@ class PageView(context: Context) : View(context) {
     }
 
     var onZone: ((Zone) -> Unit)? = null
+    var tapZones = 0
+    /** A few words from the page at [offset], for naming a bookmark. */
+    fun snippetAt(offset: Int): String =
+        text.subSequence(offset.coerceIn(0, text.length), (offset + 70).coerceAtMost(text.length)).toString()
+            .replace('￼', ' ').replace(Regex("\\s+"), " ").trim()
+    val textLength: Int get() = text.length
     /** Called with the href of a link the reader tapped. */
     var onLink: ((String) -> Unit)? = null
     var footerText: String = ""
@@ -791,8 +797,7 @@ class PageView(context: Context) : View(context) {
                 if (!scrollMode && abs(dx) > 70 * density && abs(dx) > abs(dy) * 1.5f) {
                     onZone?.invoke(if ((dx < 0) != rtl) Zone.NEXT else Zone.PREV)
                 } else if (abs(dx) < 20 * density && abs(dy) < 20 * density) {
-                    val f = e.x / width
-                    onZone?.invoke(if (f < 0.3f) (if (rtl) Zone.NEXT else Zone.PREV) else if (f > 0.7f) (if (rtl) Zone.PREV else Zone.NEXT) else Zone.MENU)
+                    onZone?.invoke(TapZones.zoneAt(tapZones, e.x / width, e.y / height, rtl))
                 }
                 return true
             }

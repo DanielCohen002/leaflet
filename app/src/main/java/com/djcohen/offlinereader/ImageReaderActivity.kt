@@ -79,6 +79,7 @@ class ImageReaderActivity : Activity() {
         if (found == null) { finish(); return }
         entry = found
         prefs = Prefs(this, entry.ext)
+        library.audioTab = false   // going back from a book lands on the Books shelf
 
         val root = FrameLayout(this)
         view = ImagePageView(this).apply {
@@ -197,6 +198,7 @@ class ImageReaderActivity : Activity() {
     }
 
     private fun applyPrefs() {
+        view.tapZones = prefs.tapZones
         view.setInvert(prefs.invertImages)
         scrollView.setInvert(prefs.invertImages)
         scrollView.placeholderColor = when {
@@ -446,6 +448,9 @@ class ImageReaderActivity : Activity() {
             if (mode != prefs.imageLayout) { prefs.imageLayout = mode; applyLayout() }
         }
         box.addView(group)
+
+        label("Touch zones (one page or two pages; continuous scroll keeps top, middle, bottom)")
+        box.addView(TapZones.picker(this, prefs.tapZones) { prefs.tapZones = it; applyPrefs() })
 
         check("Show the first page (cover) on its own in two-page mode", prefs.coverAlone) {
             prefs.coverAlone = it

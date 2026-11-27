@@ -23,6 +23,23 @@ class TopBar(context: Context, onBack: () -> Unit) : LinearLayout(context) {
         get() = label.text
         set(v) { label.text = v }
 
+    private val bookmarkButton = ImageView(context)
+
+    /** Adds a bookmark button at the right end of the bar. */
+    fun setBookmarkAction(action: () -> Unit) {
+        val d = resources.displayMetrics.density
+        bookmarkButton.apply {
+            setImageResource(R.drawable.ic_bookmark)
+            setColorFilter(Color.WHITE)
+            contentDescription = "Bookmarks"
+            background = RippleDrawable(ColorStateList.valueOf(0x44FFFFFF), null, GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.WHITE) })
+            isClickable = true
+            setOnClickListener { action() }
+            setPadding((10 * d).toInt(), (10 * d).toInt(), (10 * d).toInt(), (10 * d).toInt())
+        }
+        if (bookmarkButton.parent == null) addView(bookmarkButton, LayoutParams((48 * d).toInt(), (48 * d).toInt()))
+    }
+
     init {
         orientation = HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL

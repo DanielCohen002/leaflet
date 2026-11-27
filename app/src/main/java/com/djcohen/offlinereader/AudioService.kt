@@ -47,8 +47,8 @@ class AudioService : Service() {
     private var resumeAfterFocus = false
     /** Set when something else interrupted playback; the next play() steps back a few seconds so nothing is missed. */
     private var rewindOnPlay = false
-    private val rewindMs = 30_000L  // reopened from fully closed
-    private val interruptRewindMs = 5_000L  // interrupted by a notification, call or another app
+    private val rewindMs get() = lib.reopenRewindSec * 1000L          // reopened from fully closed
+    private val interruptRewindMs get() = lib.interruptRewindSec * 1000L  // interrupted by a notification, call or another app
     private var focusRequest: AudioFocusRequest? = null
     private var inForeground = false
     private var pausedForSilence = false

@@ -43,6 +43,10 @@ class ReaderActivity : Activity() {
     private var chapter = 0
     private var loading = true
     private var overlayVisible = false
+    private lateinit var scrubber: SeekBar
+    private lateinit var scrubLabel: TextView
+    private var scrubbing = false
+    private val SCRUB_MAX = 10000
     private lateinit var backChip: TextView
     private var backTarget: Pair<Int, Int>? = null      // (chapter, offset) to return to after following a link
     private var backToken = 0
@@ -61,6 +65,7 @@ class ReaderActivity : Activity() {
         if (found == null) { finish(); return }
         entry = found
         prefs = Prefs(this, entry.ext)
+        library.audioTab = false   // going back from a book lands on the Books shelf
 
         val root = FrameLayout(this)
         page = PageView(this).apply {
@@ -76,16 +81,31 @@ class ReaderActivity : Activity() {
         root.addView(page, FrameLayout.LayoutParams(-1, -1))
 
         topBar = TopBar(this) { finish() }.apply { visibility = View.GONE }
+        topBar.setBookmarkAction { showBookmarks() }
         root.addView(topBar, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
 
         bottomBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
+            orientation = LinearLayout.VERTICAL
             setBackgroundColor(0xE6202020.toInt()); visibility = View.GONE
             setPadding(dp(8), dp(8), dp(8), dp(8))
         }
+        // Scrubber: drag to jump around the book. The label shows the chapter name and how far through the book you would land.
+        scrubLabel = TextView(this).apply { setTextColor(0xFFFFFFFF.toInt()); textSize = 14f; setPadding(dp(8), 0, dp(8), 0); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+        scrubber = SeekBar(this).apply {
+            max = 1
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) { if (fromUser) updateScrubLabel(p) }
+                override fun onStartTrackingTouch(s: SeekBar?) { scrubbing = true }
+                override fun onStopTrackingTouch(s: SeekBar?) { scrubbing = false; scrubTo(progress) }
+            })
+        }
+        bottomBar.addView(scrubLabel, LinearLayout.LayoutParams(-1, -2))
+        bottomBar.addView(scrubber, LinearLayout.LayoutParams(-1, -2))
+        val buttonRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        bottomBar.addView(buttonRow, LinearLayout.LayoutParams(-1, -2))
         fun barButton(label: String, action: () -> Unit) = Button(this).apply {
             text = label; isAllCaps = false; setOnClickListener { action() }
-            bottomBar.addView(this, LinearLayout.LayoutParams(0, -2, 1f))
+            buttonRow.addView(this, LinearLayout.LayoutParams(0, -2, 1f))
         }
         barButton("‹") { skipChapter(-1) }
         barButton("Chapters") { showChapters() }
@@ -151,6 +171,7 @@ class ReaderActivity : Activity() {
                 ui.post {
                     book = b
                     topBar.text = entry.title
+                    startLengths(b)
                     loadChapter(ch.coerceIn(0, b.chapterTitles.size - 1), off)
                 }
             } catch (t: Throwable) {
@@ -167,6 +188,7 @@ class ReaderActivity : Activity() {
         page.setStyle(Fonts.typeface(prefs.font), prefs.textSizeSp, prefs.spacing / 100f, t.fg, t.bg, prefs.indent / 10f, prefs.justify)
         page.setScrollMode(false)   // the scroll option was removed; any old saved choice is ignored
         page.turnStyle = prefs.turnStyle
+        page.tapZones = prefs.tapZones
         window.decorView.setBackgroundColor(t.bg)
         if (prefs.keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -202,8 +224,130 @@ class ReaderActivity : Activity() {
                 }.start()
             }
         }
+        if (show) syncScrubber()
+        positionBack()
         slide(topBar, -1f)
         slide(bottomBar, 1f)
+    }
+
+    // --- bookmarks -------------------------------------------------------------------------
+
+    private fun showBookmarks() {
+        val b = book ?: return
+        val list = library.bookmarks(entry.id)
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), dp(8)) }
+        val dialog = AlertDialog.Builder(this).setTitle("Bookmarks").setView(ScrollView(this).apply { addView(box) })
+            .setNegativeButton("Close", null).showLeaf()
+        box.addView(Button(this).apply {
+            text = "Add bookmark here"; isAllCaps = false
+            setOnClickListener {
+                val off = page.currentOffset
+                val title = try { b.titleAt(chapter, off) } catch (t: Throwable) { b.chapterTitles.getOrElse(chapter) { "" } }
+                val pct = (((0 until chapter).sumOf { lenOf(it) } + off) * 100 / totalLen(b.chapterTitles.size)).toInt()
+                val snip = page.snippetAt(off).take(50)
+                library.addBookmark(entry.id, Library.Bookmark(chapter, off, "$title · $pct%" + if (snip.isNotEmpty()) "\n$snip…" else "", System.currentTimeMillis()))
+                dialog.dismiss()
+                Toast.makeText(this@ReaderActivity, "Bookmark added", Toast.LENGTH_SHORT).show()
+            }
+        })
+        if (list.isEmpty()) box.addView(TextView(this).apply { text = "No bookmarks yet."; alpha = 0.7f; setPadding(0, dp(12), 0, dp(4)) })
+        list.forEachIndexed { i, bm ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(8), 0, dp(8)) }
+            row.addView(TextView(this).apply {
+                text = bm.label; textSize = 14f
+                setOnClickListener {
+                    dialog.dismiss(); setOverlay(false)
+                    val from = chapter to page.currentOffset
+                    if (bm.chapter == chapter) page.jumpToOffset(bm.offset) else loadChapter(bm.chapter, bm.offset)
+                    showBack(from)
+                }
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+            row.addView(Button(this).apply {
+                text = "✕"; isAllCaps = false; minWidth = 0; minimumWidth = 0
+                setOnClickListener { library.removeBookmark(entry.id, i); dialog.dismiss(); showBookmarks() }
+            })
+            box.addView(row)
+        }
+    }
+
+    // --- scrubber --------------------------------------------------------------------------
+
+    /** Characters in each chapter file (-1 until known), worked out quietly in the background after the book opens. */
+    private var lens = IntArray(0)
+
+    private fun startLengths(b: Book) {
+        val n = b.chapterTitles.size
+        lens = IntArray(n) { -1 }
+        fun step(c: Int) {
+            if (c >= n || isFinishing || book !== b) return
+            io.execute {
+                val len = plainText.getOrPut(c) { try { b.load(c, 8, 8).toString() } catch (t: Throwable) { "" } }.length
+                lens[c] = len
+                // One chapter per task, so opening a chapter yourself never waits long in the queue.
+                ui.post { step(c + 1) }
+            }
+        }
+        ui.postDelayed({ step(0) }, 3000)
+    }
+
+    private fun lenOf(c: Int): Long {
+        if (c == chapter && page.textLength > 1) return page.textLength.toLong()
+        val l = lens.getOrElse(c) { -1 }
+        if (l >= 0) return l.toLong()
+        val known = lens.filter { it >= 0 }
+        return if (known.isEmpty()) page.textLength.toLong().coerceAtLeast(1) else known.average().toLong().coerceAtLeast(1)
+    }
+
+    private fun totalLen(n: Int): Long = (0 until n).sumOf { lenOf(it) }.coerceAtLeast(1)
+
+    private fun charsPerPage(): Double = (page.textLength.toDouble() / page.pageCount.coerceAtLeast(1)).coerceAtLeast(1.0)
+
+    /** The scrubber runs smoothly through the whole book by character count, 10000 steps. */
+    private fun syncScrubber() {
+        val b = book ?: return
+        val n = b.chapterTitles.size
+        val before = (0 until chapter.coerceIn(0, n - 1)).sumOf { lenOf(it) }
+        val pos = before + page.currentOffset
+        scrubber.max = SCRUB_MAX
+        scrubber.progress = (pos * SCRUB_MAX / totalLen(n)).toInt().coerceIn(0, SCRUB_MAX)
+        updateScrubLabel(scrubber.progress)
+    }
+
+    /** Chapter file and offset in it for scrubber position [p]. */
+    private fun locate(p: Int, n: Int): Pair<Int, Int> {
+        var pos = p.toLong() * totalLen(n) / SCRUB_MAX
+        for (c in 0 until n) {
+            val len = lenOf(c)
+            if (pos < len || c == n - 1) return c to pos.toInt().coerceIn(0, (len - 1).toInt().coerceAtLeast(0))
+            pos -= len
+        }
+        return 0 to 0
+    }
+
+    private fun updateScrubLabel(p: Int) {
+        val b = book ?: return
+        val n = b.chapterTitles.size
+        val (c, off) = locate(p, n)
+        val total = totalLen(n)
+        val cpp = charsPerPage()
+        val pageNo = (p.toLong() * total / SCRUB_MAX / cpp).toLong() + 1
+        val pages = (total / cpp).toLong().coerceAtLeast(1)
+        val title = try { b.titleAt(c, off) } catch (t: Throwable) { b.chapterTitles[c] }
+        scrubLabel.text = "Page ${pageNo.coerceAtMost(pages)} of about $pages  ·  ${p * 100 / SCRUB_MAX}%  ·  $title"
+    }
+
+    private fun scrubTo(p: Int) {
+        val b = book ?: return
+        if (loading) return
+        val (c, off) = locate(p, b.chapterTitles.size)
+        val from = chapter to page.currentOffset
+        if (c == chapter) {
+            if (kotlin.math.abs(off - page.currentOffset) < charsPerPage() / 2) return
+            page.jumpToOffset(off)
+        } else {
+            loadChapter(c, off)
+        }
+        showBack(from)   // the "Back to where you were" button undoes the jump
     }
 
     // --- navigation ------------------------------------------------------------------------
@@ -227,6 +371,7 @@ class ReaderActivity : Activity() {
                 page.footerProvider = { off -> b.titleAt(index, off) }
                 page.setContent(text, start, b.chapterStarts(index))
                 loading = false
+                if (overlayVisible && !scrubbing) syncScrubber()
             }
         }
     }
@@ -252,8 +397,17 @@ class ReaderActivity : Activity() {
         }
     }
 
+    /** Keep the "Back to where you were" button clear of the menu bar (it is taller now that it holds the scrubber). */
+    private fun positionBack() {
+        if (!::backChip.isInitialized) return
+        val lp = backChip.layoutParams as FrameLayout.LayoutParams
+        val above = if (overlayVisible) (if (bottomBar.height > 0) bottomBar.height else dp(150)) + dp(12) else dp(72)
+        if (lp.bottomMargin != above) { lp.bottomMargin = above; backChip.layoutParams = lp }
+    }
+
     private fun showBack(from: Pair<Int, Int>) {
         backTarget = from
+        positionBack()
         val token = ++backToken
         backChip.visibility = View.VISIBLE
         ui.postDelayed({ if (token == backToken) hideBack() }, 12000)   // fades away if you carry on reading
@@ -306,7 +460,9 @@ class ReaderActivity : Activity() {
         if (loading) return
         val toc = b.toc
         val e = toc.getOrNull(currentTocIndex(b) + delta) ?: return
+        val from = chapter to page.currentOffset
         loadChapter(e.chapter, 0, e.anchor)
+        showBack(from)
     }
 
     private fun showChapters() {
@@ -315,7 +471,9 @@ class ReaderActivity : Activity() {
             .setTitle("Chapters")
             .setSingleChoiceItems(b.toc.map { it.title }.toTypedArray(), currentTocIndex(b)) { d, which ->
                 val e = b.toc[which]
+                val from = chapter to page.currentOffset
                 d.dismiss(); setOverlay(false); loadChapter(e.chapter, 0, e.anchor)
+                showBack(from)
             }
             .setNegativeButton("Close", null)
             .showLeaf()
@@ -470,12 +628,17 @@ class ReaderActivity : Activity() {
     private fun indentText(tenthsOfEm: Int) = if (tenthsOfEm == 0) "none" else "${tenthsOfEm / 10f} em"
 
     private fun showSettings() {
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), dp(8)) }
-        fun label(t: String) = TextView(this).apply { text = t; setPadding(0, dp(12), 0, dp(4)) }.also { box.addView(it) }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(2), dp(14), dp(2)) }
+        fun label(t: String) = TextView(this).apply { text = t; setPadding(0, dp(6), 0, dp(2)) }.also { box.addView(it) }
 
         label("Font")
         val spinner = Spinner(this)
-        spinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, Fonts.all.map { it.first })
+        // Each font name is drawn in that font, so the list shows what you will get.
+        spinner.adapter = object : ArrayAdapter<String>(this, android.R.layout.simple_spinner_dropdown_item, Fonts.all.map { it.first }) {
+            private fun styled(pos: Int, v: View): View = v.also { (it as? TextView)?.typeface = Fonts.typeface(pos) }
+            override fun getView(pos: Int, convert: View?, parent: android.view.ViewGroup) = styled(pos, super.getView(pos, convert, parent))
+            override fun getDropDownView(pos: Int, convert: View?, parent: android.view.ViewGroup) = styled(pos, super.getDropDownView(pos, convert, parent))
+        }
         spinner.setSelection(prefs.font)
         spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
@@ -485,35 +648,51 @@ class ReaderActivity : Activity() {
         }
         box.addView(spinner)
 
+        // The three text sliders only change the page when Apply is tapped.
+        var pendingSize = prefs.textSizeSp
+        var pendingSpacing = prefs.spacing
+        var pendingIndent = prefs.indent
+        var applyButton: Button? = null
+        fun touched() { applyButton?.isEnabled = pendingSize != prefs.textSizeSp || pendingSpacing != prefs.spacing || pendingIndent != prefs.indent }
         val sizeLabel = label("Text size: ${prefs.textSizeSp}")
         box.addView(SeekBar(this).apply {
-            max = 28; progress = prefs.textSizeSp - 12
+            max = 14; progress = (prefs.textSizeSp - 12).coerceIn(0, 14)
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) { sizeLabel.text = "Text size: ${p + 12}" }
                 override fun onStartTrackingTouch(s: SeekBar?) {}
-                override fun onStopTrackingTouch(s: SeekBar?) { prefs.textSizeSp = progress + 12; applyStyle() }
+                override fun onStopTrackingTouch(s: SeekBar?) { pendingSize = progress + 12; touched() }
             })
         })
 
         val spaceLabel = label("Line spacing: ${prefs.spacing / 100f}")
         box.addView(SeekBar(this).apply {
-            max = 24; progress = (prefs.spacing - 100) / 5
+            max = 12; progress = ((prefs.spacing - 100) / 5).coerceIn(0, 12)
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) { spaceLabel.text = "Line spacing: ${(100 + p * 5) / 100f}" }
                 override fun onStartTrackingTouch(s: SeekBar?) {}
-                override fun onStopTrackingTouch(s: SeekBar?) { prefs.spacing = 100 + progress * 5; applyStyle() }
+                override fun onStopTrackingTouch(s: SeekBar?) { pendingSpacing = 100 + progress * 5; touched() }
             })
         })
 
         val indentLabel = label("Paragraph indent: ${indentText(prefs.indent)}")
         box.addView(SeekBar(this).apply {
-            max = 40; progress = prefs.indent
+            max = 20; progress = prefs.indent.coerceIn(0, 20)
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) { indentLabel.text = "Paragraph indent: ${indentText(p)}" }
                 override fun onStartTrackingTouch(s: SeekBar?) {}
-                override fun onStopTrackingTouch(s: SeekBar?) { prefs.indent = progress; applyStyle() }
+                override fun onStopTrackingTouch(s: SeekBar?) { pendingIndent = progress; touched() }
             })
         })
+
+        val applyBtn = Button(this).apply {
+            text = "Apply"; isAllCaps = false; isEnabled = false
+            setOnClickListener {
+                prefs.textSizeSp = pendingSize; prefs.spacing = pendingSpacing; prefs.indent = pendingIndent
+                applyStyle(); touched()
+            }
+        }
+        applyButton = applyBtn
+        box.addView(applyBtn, LinearLayout.LayoutParams(-1, -2))
 
         label("Colors")
         val swatchRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -530,8 +709,8 @@ class ReaderActivity : Activity() {
         for (i in Themes.rowOrder) {
             val t = Themes.all[i]
             val v = TextView(this).apply {
-                text = "Aa\n${t.name}"; gravity = Gravity.CENTER; setTextColor(t.fg); textSize = 14f
-                setPadding(0, dp(10), 0, dp(10))
+                text = t.name; gravity = Gravity.CENTER; setTextColor(t.fg); textSize = 14f
+                setPadding(0, dp(7), 0, dp(7))
                 setOnClickListener { prefs.theme = i; applyStyle(); paintSwatches() }
             }
             swatches += i to v
@@ -540,8 +719,11 @@ class ReaderActivity : Activity() {
         paintSwatches()
         box.addView(swatchRow)
 
-        label("Page turn")
         val turnGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
+        label("Touch zones")
+        box.addView(TapZones.picker(this, prefs.tapZones) { prefs.tapZones = it; applyStyle() })
+
+        label("Page turn animation")
         listOf("None", "Slide", "Curl", "Flip").forEachIndexed { i, n ->
             turnGroup.addView(RadioButton(this).apply { text = n; id = 2000 + i })
         }
@@ -552,9 +734,16 @@ class ReaderActivity : Activity() {
         fun check(text: String, value: Boolean, set: (Boolean) -> Unit) = CheckBox(this).apply {
             this.text = text; isChecked = value; setOnCheckedChangeListener { _, c -> set(c) }
         }.also { box.addView(it) }
-        check("Justify text (straight edges)", prefs.justify) { prefs.justify = it; applyStyle() }
-        check("Volume keys turn pages", prefs.volumeKeys) { prefs.volumeKeys = it }
-        check("Keep screen on", prefs.keepScreenOn) { prefs.keepScreenOn = it; applyStyle() }
+        val checks = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        fun check(text: String, value: Boolean, parent: LinearLayout, set: (Boolean) -> Unit) = CheckBox(this).apply {
+            this.text = text; isChecked = value; setOnCheckedChangeListener { _, c -> set(c) }
+        }.also { parent.addView(it, LinearLayout.LayoutParams(0, -2, 1f)) }
+        check("Justify text", prefs.justify, checks) { prefs.justify = it; applyStyle() }
+        check("Volume keys", prefs.volumeKeys, checks) { prefs.volumeKeys = it }
+        box.addView(checks)
+        val checks2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        check("Keep screen on", prefs.keepScreenOn, checks2) { prefs.keepScreenOn = it; applyStyle() }
+        box.addView(checks2)
 
         AlertDialog.Builder(this).setTitle("Reading settings").setView(ScrollView(this).apply { addView(box) })
             .setPositiveButton("Done", null).showLeaf()

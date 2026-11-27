@@ -366,8 +366,18 @@ class LibraryActivity : Activity() {
         }
         val rows = ArrayList<AudioRow>()
         if (audioPath.isNotEmpty()) rows += AudioRow.Up
-        shelf.folders.forEach { rows += AudioRow.Folder(it.first, it.second) }
-        shelf.books.forEach { rows += AudioRow.Book(it) }
+        // Folders and audiobooks are mixed together: whatever was played most recently first (a folder counts as played when
+        // anything inside it was), then everything never played, A to Z.
+        class Item(val row: AudioRow, val name: String, val played: Long)
+        val items = shelf.folders.map { Item(AudioRow.Folder(it.first, it.second), it.first, shelf.folderPlayed[it.first] ?: 0L) } +
+            shelf.books.map { Item(AudioRow.Book(it), it.title, audioLib.lastPlayed(it.id)) }
+        val played = items.filter { it.played > 0 }.sortedWith { a, b ->
+            if (a.played != b.played) b.played.compareTo(a.played) else AudioLibrary.naturalCompare(a.name, b.name)
+        }
+        val never = items.filter { it.played == 0L }
+        // Never-played items keep the library's order for books (series order) unless folders are mixed in, which go A to Z by name.
+        val neverSorted = if (never.any { it.row is AudioRow.Folder }) never.sortedWith { a, b -> AudioLibrary.naturalCompare(a.name, b.name) } else never
+        (played + neverSorted).forEach { rows += it.row }
         audioRows = rows
     }
 
@@ -727,6 +737,13 @@ class LibraryActivity : Activity() {
         val refreshBooks = {
             if (library.syncFolder == null) toast("No synced folder yet. Use Add books and choose a folder to sync.") else syncFolder(quiet = false)
         }
+        // The pull-down bubble: hangs from the top of the shelf and follows the finger.
+        pullBubble = android.widget.ImageView(this).apply {
+            setImageResource(R.drawable.ic_refresh); scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE; setPadding(dp(10), dp(10), dp(10), dp(10))
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0xFFFFF8E7.toInt()) }
+            elevation = dp(6).toFloat(); alpha = 0f; visibility = View.GONE
+        }
+        shelfHost.addView(pullBubble, FrameLayout.LayoutParams(dp(46), dp(46), Gravity.TOP or Gravity.CENTER_HORIZONTAL))
         for (v in listOf(list, grid, empty)) pullToRefresh(v, refreshBooks)
         for (v in listOf(audioList, audioGrid, audioEmpty)) pullToRefresh(v) { syncAudio() }
         setContentView(root)
@@ -742,8 +759,8 @@ class LibraryActivity : Activity() {
         // Opening the app (not coming back to it) goes straight to the book you were reading.
         if (savedInstanceState == null && !autoOpenDone && intent?.action != Intent.ACTION_VIEW && !intent.getBooleanExtra(EXTRA_NO_AUTO_OPEN, false) && !library.shelfAudio) {
             autoOpenDone = true
-            // Backing out of the reopened book lands on the Audiobooks shelf, like backing out of an audiobook.
-            library.lastOpened()?.let { library.audioTab = true; openBook(it) }
+            // Backing out of the reopened book lands on the Books shelf (a book is not an audiobook).
+            library.lastOpened()?.let { library.audioTab = false; openBook(it) }
         }
     }
 
@@ -1100,11 +1117,54 @@ class LibraryActivity : Activity() {
      * Pull down at the top of [v] and let go to run [onRefresh]. A tick is felt when the pull is far enough. The list still
      * scrolls normally: this only watches the touches.
      */
+    private lateinit var pullBubble: android.widget.ImageView
+    private var pullSpinner: android.animation.ObjectAnimator? = null
+
+    /**
+     * Like pull-to-refresh in Chrome: a round paper-colored bubble drops from the top edge and follows the finger, its
+     * arrow turning as you pull. Pull past the arming depth (you feel a tick) and let go: the bubble holds there and
+     * spins while the search runs, then pops back up. Let go early and it just springs back.
+     */
     private fun pullToRefresh(v: View, onRefresh: () -> Unit) {
         var startY = 0f
         var tracking = false
         var armed = false
         val threshold = dp(80)
+        val hidden = -dp(56).toFloat()
+        val rest = dp(28).toFloat()                       // where the bubble sits while it spins
+        fun retract() {
+            pullSpinner?.cancel(); pullSpinner = null
+            pullBubble.animate().cancel()
+            pullBubble.animate().translationY(hidden).alpha(0f).scaleX(0.6f).scaleY(0.6f).setDuration(220)
+                .setInterpolator(android.view.animation.AccelerateInterpolator())
+                .withEndAction { pullBubble.visibility = View.GONE }.start()
+        }
+        fun spinWhileSearching() {
+            pullBubble.animate().cancel()
+            pullBubble.animate().translationY(rest).alpha(1f).scaleX(1f).scaleY(1f).setDuration(160).start()
+            pullSpinner?.cancel()
+            pullSpinner = android.animation.ObjectAnimator.ofFloat(pullBubble, View.ROTATION, pullBubble.rotation, pullBubble.rotation + 360f).apply {
+                duration = 800; repeatCount = android.animation.ValueAnimator.INFINITE
+                interpolator = android.view.animation.LinearInterpolator(); start()
+            }
+            val began = System.currentTimeMillis()
+            fun check() {
+                val busy = syncing || syncingAudio
+                val waited = System.currentTimeMillis() - began
+                if ((!busy && waited > 900) || waited > 20000) retract() else pullBubble.postDelayed({ check() }, 250)
+            }
+            pullBubble.postDelayed({ check() }, 400)
+        }
+        fun follow(pulled: Float) {
+            // The bubble lags behind the finger a little (resistance) and fades and grows in as it comes down.
+            val p = (pulled / (threshold * 1.4f)).coerceIn(0f, 1f)
+            if (pullBubble.visibility != View.VISIBLE) { pullBubble.animate().cancel(); pullSpinner?.cancel(); pullBubble.visibility = View.VISIBLE }
+            pullBubble.alpha = (p * 1.6f).coerceAtMost(1f)
+            val scale = 0.6f + 0.4f * p
+            pullBubble.scaleX = scale; pullBubble.scaleY = scale
+            pullBubble.translationY = hidden + (rest - hidden) * p + dp(10) * p
+            pullBubble.rotation = 270f * p
+        }
         v.isClickable = true
         v.setOnTouchListener { view, e ->
             when (e.actionMasked) {
@@ -1112,14 +1172,22 @@ class LibraryActivity : Activity() {
                 android.view.MotionEvent.ACTION_MOVE -> {
                     if (view.canScrollVertically(-1)) { tracking = false }
                     else if (!tracking) { tracking = true; startY = e.rawY }
-                    else {
+                    else if (!swipeDragging) {
                         val pulled = e.rawY - startY
+                        if (pulled > 0) follow(pulled)
                         if (!armed && pulled > threshold) { armed = true; view.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK) }
                         else if (armed && pulled < threshold * 0.6f) armed = false
                     }
                 }
-                android.view.MotionEvent.ACTION_UP -> { if (armed && tracking) onRefresh(); armed = false; tracking = false }
-                android.view.MotionEvent.ACTION_CANCEL -> { armed = false; tracking = false }
+                android.view.MotionEvent.ACTION_UP -> {
+                    if (armed && tracking) { spinWhileSearching(); onRefresh() }
+                    else if (pullBubble.visibility == View.VISIBLE) retract()
+                    armed = false; tracking = false
+                }
+                android.view.MotionEvent.ACTION_CANCEL -> {
+                    if (pullBubble.visibility == View.VISIBLE && pullSpinner == null) retract()
+                    armed = false; tracking = false
+                }
             }
             false
         }

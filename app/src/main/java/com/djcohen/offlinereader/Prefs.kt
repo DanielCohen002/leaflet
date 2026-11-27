@@ -102,6 +102,10 @@ class Prefs(context: Context, ext: String = "") {
     var turnStyle: Int
         get() = int("turnstyle", 1)
         set(v) = putInt("turnstyle", v)
+    /** Where taps go: index into TapZones.names. */
+    var tapZones: Int
+        get() = int("tapzones", 0)
+        set(v) = putInt("tapzones", v)
     var volumeKeys: Boolean
         get() = bool("volkeys", true)
         set(v) = putBool("volkeys", v)

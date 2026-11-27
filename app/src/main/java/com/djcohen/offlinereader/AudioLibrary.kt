@@ -47,11 +47,15 @@ class AudioLibrary(private val context: Context) {
         get() = sp.getInt("skip_fwd", 30)
         set(v) = sp.edit().putInt("skip_fwd", v.coerceIn(1, 600)).apply()
 
-    /** Speed choices offered in the player, ascending. */
-    var speedPresets: List<Float>
-        get() = (sp.getString("speeds", null) ?: DEFAULT_SPEEDS).split(',').mapNotNull { it.trim().toFloatOrNull() }
-            .filter { it in 0.5f..4f }.distinct().sorted().ifEmpty { listOf(1f) }
-        set(v) = sp.edit().putString("speeds", v.joinToString(",")).apply()
+    /** Seconds stepped back when playback resumes after an interruption (a notification, call or another app). */
+    var interruptRewindSec: Int
+        get() = sp.getInt("rewind_interrupt", 5)
+        set(v) = sp.edit().putInt("rewind_interrupt", v.coerceIn(0, 120)).apply()
+
+    /** Seconds stepped back when an audiobook is reopened after the app was fully closed. */
+    var reopenRewindSec: Int
+        get() = sp.getInt("rewind_reopen", 30)
+        set(v) = sp.edit().putInt("rewind_reopen", v.coerceIn(0, 300)).apply()
 
     /** Show the time left divided by the playback speed (1 h left at 1.5x reads 40 min). */
     var adjustedRemaining: Boolean
@@ -83,23 +87,28 @@ class AudioLibrary(private val context: Context) {
     }
 
     /** What to show for the shelf folder [path]: its sub-folders (with how many audiobooks each holds) and its audiobooks. */
-    class Shelf(val folders: List<Pair<String, Int>>, val books: List<Audiobook>)
+    class Shelf(val folders: List<Pair<String, Int>>, val books: List<Audiobook>, val folderPlayed: Map<String, Long> = emptyMap())
+
+    /** When this audiobook was last played (0 if never). */
+    fun lastPlayed(id: String): Long = sp.getLong("played_$id", 0L)
 
     fun shelf(path: String): Shelf {
         val all = books()
         val prefix = if (path.isEmpty()) "" else "$path/"
         val counts = LinkedHashMap<String, Int>()
+        val folderPlayed = HashMap<String, Long>()
         for (b in all) {
             if (b.folder.isEmpty() || !b.folder.startsWith(prefix) || b.folder == path) continue
             val child = b.folder.removePrefix(prefix).substringBefore('/')
             counts[child] = (counts[child] ?: 0) + 1
+            folderPlayed[child] = maxOf(folderPlayed[child] ?: 0L, lastPlayed(b.id))   // a folder counts as played when anything in it was
         }
         val here = all.filter { it.folder == path }
         // A series folder reads in series order when every title says which book it is ("Book 2"), otherwise A to Z.
         val numbers = here.map { SERIES_NUMBER.find(it.title)?.groupValues?.get(1)?.toIntOrNull() }
         val ordered = if (here.size > 1 && numbers.all { it != null }) here.sortedBy { b -> SERIES_NUMBER.find(b.title)!!.groupValues[1].toInt() }
         else here.sortedWith { a, b -> naturalCompare(a.title, b.title) }
-        return Shelf(counts.entries.sortedWith { a, b -> naturalCompare(a.key, b.key) }.map { it.key to it.value }, ordered)
+        return Shelf(counts.entries.sortedWith { a, b -> naturalCompare(a.key, b.key) }.map { it.key to it.value }, ordered, folderPlayed)
     }
 
     fun book(id: String): Audiobook? = books().firstOrNull { it.id == id }
@@ -357,7 +366,6 @@ class AudioLibrary(private val context: Context) {
     }
 
     companion object {
-        const val DEFAULT_SPEEDS = "0.8,1,1.25,1.5,1.75,2"
         private val SERIES_NUMBER = Regex("""(?:book|vol(?:ume)?\.?|part|#)\s*(\d+)""", RegexOption.IGNORE_CASE)
         private val NUMBER_WORDS = Regex(
             """\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|[ivxlc]{1,6})\b|\d""",

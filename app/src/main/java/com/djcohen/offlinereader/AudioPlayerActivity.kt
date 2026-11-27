@@ -53,6 +53,9 @@ class AudioPlayerActivity : Activity() {
     private lateinit var prevButton: View
     private lateinit var nextButton: View
     private lateinit var speedText: TextView
+    private lateinit var backChip: TextView
+    private var backMs = 0L
+    private var backToken = 0
     private lateinit var sleepLabel: TextView
     private lateinit var chaptersAction: View
     private lateinit var partsAction: View
@@ -150,6 +153,18 @@ class AudioPlayerActivity : Activity() {
         part = TextView(this).apply { textSize = 15f; setTextColor(PAGE_DIM); gravity = Gravity.CENTER; maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
         column.addView(part, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4) })
 
+        // "Back to where you were": shown for a while after a jump (next/previous, a bookmark, a chapter or a part).
+        backChip = TextView(this).apply {
+            text = "\u21A9  Back to where you were"
+            textSize = 14f; setTextColor(FOREST); gravity = Gravity.CENTER
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            setPadding(dp(18), dp(10), dp(18), dp(10))
+            background = rounded(LEAF, 24)
+            visibility = View.GONE
+            setOnClickListener { val ms = backMs; hideBack(); service?.seekOverall(ms) }
+        }
+        column.addView(backChip, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8); gravity = Gravity.CENTER_HORIZONTAL })
+
         seek = SeekBar(this).apply {
             progressTintList = ColorStateList.valueOf(LEAF)
             progressBackgroundTintList = ColorStateList.valueOf(0x44FFF8E7)
@@ -157,8 +172,14 @@ class AudioPlayerActivity : Activity() {
             max = b.totalMs.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(s: SeekBar?, progress: Int, fromUser: Boolean) { if (fromUser) showTimes(progress.toLong()) }
-                override fun onStartTrackingTouch(s: SeekBar?) { dragging = true }
-                override fun onStopTrackingTouch(s: SeekBar?) { dragging = false; service?.seekOverall(progress.toLong()) }
+                private var from: Long? = null
+                override fun onStartTrackingTouch(s: SeekBar?) { dragging = true; from = service?.overallMs() }
+                override fun onStopTrackingTouch(s: SeekBar?) {
+                    dragging = false
+                    service?.seekOverall(progress.toLong())
+                    from?.let { if (kotlin.math.abs(progress - it) > 3000) showBack(it) }   // a real jump, not a nudge
+                    from = null
+                }
             })
         }
         column.addView(seek, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(10) })
@@ -198,8 +219,8 @@ class AudioPlayerActivity : Activity() {
             setOnClickListener { togglePlay() }
         }
         // Previous / next chapter (or part). Hidden, but still taking up room so play stays centred, when there is neither.
-        prevButton = glyph(R.drawable.ic_prev, "Previous chapter") { service?.previousTrack() }
-        nextButton = glyph(R.drawable.ic_next, "Next chapter") { service?.nextTrack() }
+        prevButton = glyph(R.drawable.ic_prev, "Previous chapter") { jumping { service?.previousTrack() } }
+        nextButton = glyph(R.drawable.ic_next, "Next chapter") { jumping { service?.nextTrack() } }
         controls.addView(prevButton, LinearLayout.LayoutParams(0, dp(64), 1f))
         controls.addView(backFrame, LinearLayout.LayoutParams(0, dp(76), 1.25f))
         controls.addView(playButton, LinearLayout.LayoutParams(dp(92), dp(92)).apply { marginStart = dp(4); marginEnd = dp(4) })
@@ -372,7 +393,7 @@ class AudioPlayerActivity : Activity() {
         stepper.addView(roundButton("+") { nudge(0.05f) }, LinearLayout.LayoutParams(dp(56), dp(56)))
         form.addView(stepper, LinearLayout.LayoutParams(-1, -2))
         form.addView(heading("Quick choices"))
-        form.addView(chipGrid(3, lib.speedPresets.map { p ->
+        form.addView(chipGrid(3, listOf(0.5f, 1f, 1.5f, 2f, 2.5f, 3f).map { p ->
             chip(formatSpeed(p) + "x", p == s.speed) { s.setSpeed(p); refresh(); dialog?.dismiss() }
         }))
         dialog = AlertDialog.Builder(this).setTitle("Playback speed").setView(form).setPositiveButton("Done", null).showLeaf()
@@ -400,7 +421,7 @@ class AudioPlayerActivity : Activity() {
             (if (i == current) "▶  " else "") + (if (numbered) "" else "${i + 1}. ") + "${c.title}   (${AudioLibrary.clock(c.ms)})"
         }
         val dialog = AlertDialog.Builder(this).setTitle("Chapters")
-            .setItems(names.toTypedArray()) { _, which -> service?.seekOverall(chapters[which].ms) }
+            .setItems(names.toTypedArray()) { _, which -> jumping { service?.seekOverall(chapters[which].ms) } }
             .setNegativeButton("Close", null).showLeaf()
         if (current > 0) dialog.listView.setSelection((current - 2).coerceAtLeast(0))
     }
@@ -410,7 +431,7 @@ class AudioPlayerActivity : Activity() {
         val now = service?.trackIndex ?: lib.position(b.id).first
         val names = b.tracks.mapIndexed { i, t -> (if (i == now) "▶  " else "") + "${i + 1}. " + AudioLibrary.stripExt(t.name) + "   (${AudioLibrary.short(t.durationMs)})" }
         AlertDialog.Builder(this).setTitle("Parts")
-            .setItems(names.toTypedArray()) { _, which -> service?.seekTo(which, 0) }
+            .setItems(names.toTypedArray()) { _, which -> jumping { service?.seekTo(which, 0) } }
             .setNegativeButton("Close", null).showLeaf()
     }
 
@@ -430,7 +451,7 @@ class AudioPlayerActivity : Activity() {
                 val s = service ?: return@setOnItemClickListener
                 lib.addBookmark(b.id, s.trackIndex, s.positionMs(), "")
                 toast("Bookmarked at ${AudioLibrary.clock(s.overallMs())}")
-            } else marks[pos - 1].let { service?.seekTo(it.track, it.ms) }
+            } else marks[pos - 1].let { m -> jumping { service?.seekTo(m.track, m.ms) } }
         }
         dialog.listView.setOnItemLongClickListener { _, _, pos, _ ->
             if (pos > 0) {
@@ -478,21 +499,20 @@ class AudioPlayerActivity : Activity() {
         form.addView(heading("Skip forward"))
         form.addView(picker(listOf(10, 15, 30, 45, 60, 90), "s", { lib.skipForwardSec }) { lib.skipForwardSec = it })
 
-        form.addView(heading("Speed choices (tap to add or remove)"))
-        val speedGrid = GridLayout(this).apply { columnCount = 4 }
-        fun fillSpeeds() {
-            speedGrid.removeAllViews()
-            val on = lib.speedPresets.toSet()
-            for (sp in ALL_SPEEDS) speedGrid.addView(chip(formatSpeed(sp) + "x", sp in on) {
-                val next = if (sp in on) on - sp else on + sp
-                if (next.isNotEmpty()) lib.speedPresets = next.sorted()
-                fillSpeeds()
-            }.apply { textSize = 14f }, GridLayout.LayoutParams(GridLayout.spec(GridLayout.UNDEFINED, 1f), GridLayout.spec(GridLayout.UNDEFINED, 1f)).apply {
-                width = 0; height = dp(44); setMargins(dp(3), dp(3), dp(3), dp(3))
-            })
+        // A single number with minus on the left and plus on the right.
+        fun stepper(title: String, step: Int, get: () -> Int, set: (Int) -> Unit) {
+            form.addView(heading(title))
+            val value = TextView(this).apply { textSize = 24f; setTextColor(PAGE); gravity = Gravity.CENTER; typeface = Typeface.create("serif", Typeface.BOLD) }
+            fun show() { value.text = "${get()} s" }
+            show()
+            val row = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+            row.addView(roundButton("−") { set(get() - step); show() }, LinearLayout.LayoutParams(dp(48), dp(48)))
+            row.addView(value, LinearLayout.LayoutParams(0, -2, 1f))
+            row.addView(roundButton("+") { set(get() + step); show() }, LinearLayout.LayoutParams(dp(48), dp(48)))
+            form.addView(row, LinearLayout.LayoutParams(-1, -2))
         }
-        fillSpeeds()
-        form.addView(speedGrid)
+        stepper("Replay after an interruption", 1, { lib.interruptRewindSec }) { lib.interruptRewindSec = it }
+        stepper("Replay after reopening the app", 5, { lib.reopenRewindSec }) { lib.reopenRewindSec = it }
 
         form.addView(heading("Time left"))
         val adjusted = LinearLayout(this)
@@ -511,12 +531,30 @@ class AudioPlayerActivity : Activity() {
             .setPositiveButton("Done", null).showLeaf()
     }
 
+    /** Run a jump, then offer to go back to where playback was before it. */
+    private fun jumping(action: () -> Unit) {
+        val from = service?.overallMs()
+        action()
+        if (from != null) showBack(from)
+    }
+
+    private fun showBack(from: Long) {
+        backMs = from
+        val token = ++backToken
+        backChip.visibility = View.VISIBLE
+        ui.postDelayed({ if (token == backToken) hideBack() }, 12000)
+    }
+
+    private fun hideBack() {
+        backToken++
+        if (::backChip.isInitialized) backChip.visibility = View.GONE
+    }
+
     private fun toast(m: String) = Toast.makeText(this, m, Toast.LENGTH_SHORT).show()
 
     companion object {
         const val EXTRA_ID = "audiobook_id"
         const val EXTRA_AUTOPLAY = "autoplay"
-        private val ALL_SPEEDS = listOf(0.6f, 0.7f, 0.8f, 0.9f, 1f, 1.1f, 1.2f, 1.25f, 1.3f, 1.4f, 1.5f, 1.6f, 1.75f, 1.8f, 2f, 2.25f, 2.5f, 3f)
         private const val FOREST = 0xFF1E3A2A.toInt()
         private const val LEAF = 0xFF6CC070.toInt()
         private const val LEAF_PRESSED = 0xFF55A85A.toInt()

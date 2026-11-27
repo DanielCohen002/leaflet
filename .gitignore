@@ -10,3 +10,4 @@ captures/
 app/src/main/assets/dict.db
 
 signing.properties
+.kotlin/

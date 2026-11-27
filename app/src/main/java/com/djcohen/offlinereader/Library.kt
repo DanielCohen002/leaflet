@@ -235,6 +235,24 @@ class Library(private val context: Context) {
         ed.apply()
     }
 
+    /** A saved spot in a book. [label] is what the list shows (chapter and a few words from the page). */
+    class Bookmark(val chapter: Int, val offset: Int, val label: String, val time: Long)
+
+    fun bookmarks(id: String): List<Bookmark> {
+        val arr = try { JSONArray(sp.getString("bm_$id", "[]")) } catch (_: Exception) { JSONArray() }
+        return (0 until arr.length()).map { val o = arr.getJSONObject(it); Bookmark(o.getInt("c"), o.getInt("o"), o.getString("l"), o.optLong("t")) }
+    }
+
+    private fun saveBookmarks(id: String, list: List<Bookmark>) {
+        val arr = JSONArray()
+        list.forEach { arr.put(JSONObject().put("c", it.chapter).put("o", it.offset).put("l", it.label).put("t", it.time)) }
+        sp.edit().putString("bm_$id", arr.toString()).apply()
+    }
+
+    fun addBookmark(id: String, b: Bookmark) = saveBookmarks(id, bookmarks(id) + b)
+
+    fun removeBookmark(id: String, index: Int) = saveBookmarks(id, bookmarks(id).toMutableList().also { it.removeAt(index) })
+
     fun positionTitle(id: String): String? = sp.getString("postitle_$id", null)
 
     fun setPositionTitle(id: String, title: String) {

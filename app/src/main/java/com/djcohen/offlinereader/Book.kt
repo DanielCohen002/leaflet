@@ -112,6 +112,20 @@ internal object HtmlText {
     private val dropCapGap = Regex("(>[A-Z]</[A-Za-z]+>(?:</[A-Za-z]+>)*)\\s*<span[^>]*>\\s*\\n\\s*</span>(?=[a-z])")
     private val prolog = Regex("(?is)<\\?xml.*?\\?>|<!DOCTYPE[^>]*>")
 
+    // Scene breaks: books often separate sections with nothing but space (an empty paragraph, a rule, or a big top/bottom margin).
+    // The converter drops all of those, so each one becomes a visible blank line.
+    private const val SPACER = "<p>&nbsp;</p>"
+    private val emptyBlock = Regex("(?is)<(p|div)\\b([^>]*)>(?:\\s|&nbsp;|&#160;|&#xA0;|\\u00a0|<br\\s*/?>|<span[^>]*>\\s*</span>)*</\\1>")
+    private val rule = Regex("(?i)<hr\\b[^>]*>")
+    private val bigMargin = Regex("(?is)<(p|div)\\b[^>]*style\\s*=\\s*[\"'][^\"']*margin-(?:top|bottom)\\s*:\\s*(\\d*\\.?\\d+)\\s*(?:em|rem)")
+
+    private fun keepSceneBreaks(html: String): String {
+        var h = emptyBlock.replace(html) { m -> if (Regex("(?i)\\s(id|name)\\s*=").containsMatchIn(m.groupValues[2])) m.value else SPACER }
+        h = rule.replace(h, SPACER + SPACER)
+        h = bigMargin.replace(h) { m -> if ((m.groupValues[2].toFloatOrNull() ?: 0f) >= 1.5f) SPACER + m.value else m.value }
+        return h
+    }
+
     // Start tags, and the id / name attributes that make a spot in the text linkable.
     private val startTag = Regex("<([A-Za-z][A-Za-z0-9:]*)(\\s[^>]*)?>")
     private val idAttr = Regex("\\s(id|name)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')", RegexOption.IGNORE_CASE)
@@ -143,7 +157,7 @@ internal object HtmlText {
         html: String, images: ((String, Int, Int) -> Bitmap?)?, maxW: Int, maxH: Int,
         anchors: MutableMap<String, Int>? = null,
     ): Spanned {
-        var cleaned = html.replace(dropCapGap, "$1").replace(prolog, "").replace(svgImage, "<img src=\"$1\"/>").replace(head, "").replace(style, "").replace(script, "")
+        var cleaned = keepSceneBreaks(html).replace(dropCapGap, "$1").replace(prolog, "").replace(svgImage, "<img src=\"$1\"/>").replace(head, "").replace(style, "").replace(script, "")
         val ids = ArrayList<String>()
         if (anchors != null) cleaned = markAnchors(cleaned, ids)
         val getter = Html.ImageGetter { src ->
@@ -376,8 +390,17 @@ class EpubBook(file: File) : Book {
         } catch (_: Exception) { /* fall back to generic titles */ }
         coverPath = manifest.values.firstOrNull { it.third.split(' ').contains("cover-image") }?.first
             ?: coverMetaId?.let { manifest[it]?.first }
-        for ((i, path) in spine.withIndex()) titles += labels[path]?.takeIf { it.isNotBlank() } ?: "Section ${i + 1}"
+        for ((i, path) in spine.withIndex()) titles += labels[path]?.takeIf { it.isNotBlank() } ?: headingOf(path) ?: "Section ${i + 1}"
     }
+
+    /** The first heading in a spine file, used to name books whose contents list is missing. */
+    private fun headingOf(path: String): String? = try {
+        readText(path)?.let { h ->
+            Regex("(?is)<h[1-3][^>]*>(.*?)</h[1-3]>").find(h)?.groupValues?.get(1)
+                ?.let { Html.fromHtml(it, Html.FROM_HTML_MODE_COMPACT).toString().trim().replace(Regex("\\s+"), " ") }
+                ?.takeIf { it.isNotBlank() }?.take(60)
+        }
+    } catch (_: Exception) { null }
 
 
     private fun addToc(path: String, fragment: String?, label: String, out: MutableMap<String, String>) {
