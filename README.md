@@ -1,9 +1,15 @@
-<p align="center"><img src="docs/leaflet-icon.png" alt="Leaflet icon" width="160"></p>
+<p align="center">
+  <img src="docs/leaflet-icon.png" alt="Leaflet icon" width="128" height="128">
+</p>
 
-# Leaflet
+<h1 align="center">Leaflet</h1>
 
 A personal e-reader (and audiobook player) for Android that stays offline. The name is a double meaning: a leaflet is a small leaf of a plant,
 and a printed leaflet.
+
+### [Download the latest signed APK](https://github.com/DanielCohen002/leaflet/releases/latest)
+
+Package name `com.djcohen.leaflet`. Needs Android 11 or newer (64-bit ARM).
 
 **Offline by design.** There is no cloud sync, no analytics, and no web dictionary: lookups use a bundled offline dictionary.
 The one exception is the **Check for updates** link in the library header: only when you tap it, the app asks GitHub for the
@@ -38,7 +44,7 @@ A separate Audiobooks tab plays MP3, M4A/M4B, AAC, OGG/Opus, FLAC and WAV, from 
 - Library as a list or a grid of covers; books you have read come first (most recent on top), then the rest A to Z
 - Optionally keep a folder (such as `Books`) in sync: chosen once with the system folder picker, so Leaflet still needs no storage permission
 
-## Download
+## Install
 
 Get the latest `Leaflet-<version>.apk` from the
 [Releases page](https://github.com/DanielCohen002/leaflet/releases) and open it on your phone (64-bit ARM,
@@ -46,7 +52,7 @@ Android 11 or newer). You may need to allow installs from your browser or file m
 show an "App scan recommended" prompt because the app isn't from the Play Store: choose **Install without
 scanning** (or **Scan app**). New versions install over the old one and keep your library.
 
-## Building
+## Build
 
 Requirements: JDK 17, the Android SDK (platform 36, build-tools 36), and Python 3 for the dictionary.
 
