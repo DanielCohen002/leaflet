@@ -557,6 +557,43 @@ class EpubBook(file: File) : Book {
         return parts.joinToString("/")
     }
 
+    private val linkTag = Regex("(?is)<link\\b[^>]*>")
+    private val hrefAttr = Regex("(?is)href\\s*=\\s*[\"']([^\"']+)[\"']")
+    private val cssRule = Regex("(?s)([^{}]+)\\{([^}]*)\\}")
+    private val classSel = Regex("^(?:p|div)?\\.([A-Za-z0-9_-]+)$")
+    private val topMargin = Regex("(?i)margin-top\\s*:\\s*(\\d*\\.?\\d+)\\s*r?em")
+    private val cssCache = HashMap<String, Set<String>>()
+
+    /** Classes whose stylesheet rule gives a big top margin (1.5em or more): the gap before a scene break. */
+    private fun spacedClasses(cssPath: String): Set<String> = cssCache.getOrPut(cssPath) {
+        val css = (readText(cssPath) ?: "").replace(Regex("(?s)/\\*.*?\\*/"), "")
+        val out = HashSet<String>()
+        for (r in cssRule.findAll(css)) {
+            val big = topMargin.find(r.groupValues[2])?.groupValues?.get(1)?.toFloatOrNull()?.let { it >= 1.5f } == true
+            if (!big) continue
+            for (sel in r.groupValues[1].split(',')) classSel.find(sel.trim())?.let { out += it.groupValues[1] }
+        }
+        out
+    }
+
+    /**
+     * Scene breaks made only with a stylesheet class (margin-top: 2em) would collapse, since styles are dropped.
+     * Put an empty paragraph before each such element so the gap stays visible.
+     */
+    private fun spaceFromStylesheets(html: String, dir: String): String {
+        val classes = HashSet<String>()
+        for (l in linkTag.findAll(html)) {
+            if (!l.value.contains("stylesheet", ignoreCase = true)) continue
+            val href = hrefAttr.find(l.value)?.groupValues?.get(1) ?: continue
+            classes += spacedClasses(resolve(dir, href))
+        }
+        if (classes.isEmpty()) return html
+        val tag = Regex("(?is)<(p|div)\\b[^>]*\\bclass\\s*=\\s*[\"']([^\"']*)[\"'][^>]*>")
+        return tag.replace(html) { m ->
+            if (m.groupValues[2].split(Regex("\\s+")).any { it in classes }) "<p>&nbsp;</p>" + m.value else m.value
+        }
+    }
+
     override fun load(index: Int, maxW: Int, maxH: Int): Spanned {
         val path = spine[index]
         if (path.substringAfterLast('.').lowercase() in setOf("jpg", "jpeg", "png", "gif", "webp")) {
@@ -569,7 +606,7 @@ class EpubBook(file: File) : Book {
             return sb
         }
         val dir = path.substringBeforeLast('/', "")
-        val html = readText(path) ?: ""
+        val html = spaceFromStylesheets(readText(path) ?: "", dir)
         val anchors = HashMap<String, Int>()
         val text = HtmlText.page(html, maxW, maxH, anchors) { src, w, h, up -> loadImage(resolve(dir, src), w, h, up) }
         chapterAnchors[index] = anchors
